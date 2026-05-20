@@ -1,1 +1,0 @@
-export type WanState="up"|"down"|"degraded";export type Wan={name:string;iface:string;ip:string;latencyMs:number;rxMbps:number;txMbps:number;state:WanState};export type Tunnel={name:string;connected:boolean;subflows:number;throughputMbps:number};export type Rule={id:string;name:string;kind:"gaming"|"streaming"|"voip";target:string;route:string};

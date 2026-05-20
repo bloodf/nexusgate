@@ -1,2 +1,0 @@
-import { NextResponse } from "next/server";
-export async function GET(){return NextResponse.json({wans:[{name:"WAN1",state:"up",rxMbps:0,txMbps:0},{name:"WAN2",state:"up",rxMbps:0,txMbps:0},{name:"4G",state:"backup",rxMbps:0,txMbps:0}],mode:"operation-aware-sd-wan",defaultPolicy:"operation_balance",defaultSticky:false,stickyExceptions:["gaming","voip","user-defined-login-sensitive"],bonding:"optional-disabled"})}

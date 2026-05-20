@@ -1,17 +1,16 @@
 name: CI
 on: [push, pull_request]
 jobs:
-  dashboard:
+  shellcheck:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dashboard
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
+      - name: Syntax check shell scripts
+        run: |
+          for f in scripts/*.sh vps/*.sh vps/tests/*.sh; do sh -n "$f"; done
+      - name: Verify required assets
+        run: |
+          test -f README.md
+          test -f scripts/configure-load-balancing.sh
+          test -f scripts/install-luci-addons.sh
+          test -f configs/network-nics.uci

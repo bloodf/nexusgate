@@ -3,18 +3,13 @@ on:
   push:
     tags: ['v*']
 jobs:
-  docker:
+  archive:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - name: Build release archive
+        run: tar --exclude=.git -czf nexusgate-${GITHUB_REF_NAME}.tgz .
+      - uses: actions/upload-artifact@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: dashboard
-          push: true
-          tags: ghcr.io/${{ github.repository }}/dashboard:${{ github.ref_name }}
+          name: nexusgate-${{ github.ref_name }}
+          path: nexusgate-${{ github.ref_name }}.tgz

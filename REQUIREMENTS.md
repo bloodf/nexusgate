@@ -10,10 +10,9 @@
 
 ## Software
 
-- OpenMPTCProuter v0.63 x86_64 ext4 EFI or OpenWrt x86_64 with mwan3
-- `mwan3`, `sqm-scripts`, `luci-app-sqm`
+- OpenMPTCProuter v0.63 x86_64 ext4 EFI or OpenWrt x86_64
+- `mwan3`, `sqm-scripts`, LuCI addons from `scripts/install-luci-addons.sh`
 - Optional: OMR VPS only for true bonding mode
-- Docker-capable OpenWrt/OMR host or LAN fallback host for dashboard
 
 ## Network
 

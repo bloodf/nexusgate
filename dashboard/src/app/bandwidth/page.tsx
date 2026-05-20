@@ -1,1 +1,0 @@
-export default function Page(){return <><h1>Bandwidth</h1><div className="grid"><div className="card"><h3>real-time per interface</h3><p>Live data via API.</p></div><div className="card"><h3>daily/weekly/monthly</h3><p>Live data via API.</p></div><div className="card"><h3>per-client breakdown</h3><p>Live data via API.</p></div></div></>}

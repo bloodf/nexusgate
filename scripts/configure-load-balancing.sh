@@ -110,7 +110,7 @@ set mwan3.voip.sticky='1'
 set mwan3.voip.timeout='3600'
 
 # HTTPS login-sensitive fallback: sticky to reduce auth/session breakage.
-# Keep broad HTTPS non-sticky by default; add domain/ip-specific sticky rules via dashboard when needed.
+# Keep broad HTTPS non-sticky by default; add domain/ip-specific sticky rules via LuCI or UCI when needed.
 
 commit mwan3
 EOF

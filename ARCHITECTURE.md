@@ -1,6 +1,6 @@
 # Architecture
 
-NexusGate is operation-aware SD-WAN/load-balancing first. Bonding via VPS is optional.
+NexusGate is operation-aware SD-WAN/load-balancing first. Bonding via VPS is optional. The project is a prompts/scripts/config overlay for OpenMPTCProuter/OpenWrt and uses the native LuCI/OMR web UI.
 
 ## Core principle
 
@@ -12,8 +12,8 @@ A single TCP/UDP flow cannot be split across two WANs without bonding/MPTCP. Nex
 
 - `eth0` → WAN1 / `wan1`
 - `eth1` → WAN2 / `wan2`
-- `eth2` → LAN / `br-lan` / `192.168.100.0/24`
-- `eth3` → MGMT or spare WAN
+- `eth2` → LAN / `br-lan`
+- `eth3` → LAN-DHCP/home Wi-Fi router uplink / `br-lan`
 - `wwan0` → 4G backup / `wan3`
 
 ## Default mode: operation-aware SD-WAN
@@ -26,8 +26,6 @@ A single TCP/UDP flow cannot be split across two WANs without bonding/MPTCP. Nex
 
 ## Policy engine
 
-Traffic classifier decides route:
-
 - Gaming/VoIP → best latency WAN, sticky, no packet drops from WAN switching.
 - Streaming → balanced WAN1/WAN2, optional domain stickiness when needed.
 - Downloads/cloud backup/package managers → balanced per flow, no device pinning.
@@ -35,13 +33,18 @@ Traffic classifier decides route:
 - Guests/IoT → balanced or WAN2 preferred.
 - Unknown/general → balanced 50/50, non-sticky.
 
+## Web UI
+
+Use built-in OpenMPTCProuter/OpenWrt LuCI:
+
+- `luci-app-mwan3` for WAN balancing/failover.
+- `luci-app-sqm` for CAKE.
+- `luci-app-statistics` / `luci-app-vnstat` for graphs/accounting.
+- OMR LuCI pages for optional bonding/bypass.
+
 ## Optional mode: VPS bonding
 
 Use OpenMPTCProuter ShadowSocks/Glorytun only when a single flow must exceed one WAN. This adds VPS cost and latency, so it is not default.
-
-## Dashboard
-
-Next.js app manages WAN health, operation policies, sticky exceptions, app/domain rules, SQM, failover, optional bonding.
 
 ## Limits
 
