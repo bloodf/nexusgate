@@ -1,9 +1,3 @@
-node_modules/
-.next/
-out/
-dist/
-build/
-*.tsbuildinfo
+*.log
 .env*
 .DS_Store
-*.log

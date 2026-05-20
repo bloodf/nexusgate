@@ -70,7 +70,7 @@ Installed UI modules:
 
 ## Important limit
 
-A single TCP flow cannot be split across two WANs without MPTCP/VPS bonding. Multi-flow operations can use both WANs.
+A single TCP flow cannot be split across two WANs without MPTCP multipath. Multi-flow operations can use both WANs.
 
 ## Quick start
 
@@ -85,6 +85,6 @@ A single TCP flow cannot be split across two WANs without MPTCP/VPS bonding. Mul
 
 - **Operation-aware SD-WAN (default)**: mwan3 per-flow balancing; sticky only for sensitive traffic.
 - **Device/App Policy Routing**: optional overrides.
-- **VPS Bonding (optional)**: only for single-flow >1Gb requirement.
+- **Advanced multipath**: MPTCP/OMR endpoint support for single-flow >1Gb scenarios.
 
 License: MIT.

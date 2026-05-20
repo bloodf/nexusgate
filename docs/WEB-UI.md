@@ -1,6 +1,6 @@
 # Web UI
 
-NexusGate uses built-in OpenMPTCProuter/OpenWrt LuCI instead of a custom dashboard.
+NexusGate uses the native OpenMPTCProuter/OpenWrt LuCI web interface.
 
 ## Access
 
@@ -10,7 +10,7 @@ https://192.168.100.1
 ssh root@192.168.100.1
 ```
 
-## Installed addons
+## Install UI addons
 
 Run:
 
@@ -18,21 +18,21 @@ Run:
 scripts/install-luci-addons.sh
 ```
 
-Adds:
+## Included LuCI modules
 
-- `luci-app-mwan3`
-- `luci-app-sqm`
-- `luci-app-statistics`
-- `luci-app-vnstat`
-- `luci-app-firewall`
-- `luci-app-commands`
-- 4G modem LuCI protocols
-- OMR bypass UI when available
+- `luci-app-mwan3` for multi-WAN policy routing and failover
+- `luci-app-sqm` for CAKE/SQM configuration
+- `luci-app-statistics` for collectd graphs
+- `luci-app-vnstat` for bandwidth accounting
+- `luci-app-firewall` for firewall management
+- `luci-app-commands` for operator diagnostics
+- `luci-proto-qmi`, `luci-proto-mbim`, `luci-proto-modemmanager` for 4G/LTE modems
+- `luci-app-omr-bypass` when available
 
-## Why no custom dashboard
+## Operator workflow
 
-- Less attack surface
-- No Docker
-- No Node runtime
-- Native OpenWrt config writes
-- Works offline
+1. Connect to LAN through `eth2` or `eth3`.
+2. Open LuCI at `http://192.168.100.1`.
+3. Verify WAN health in mwan3.
+4. Verify SQM queues in SQM.
+5. Verify bandwidth graphs in statistics/vnstat.

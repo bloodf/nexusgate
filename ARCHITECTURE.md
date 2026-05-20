@@ -1,6 +1,6 @@
 # Architecture
 
-NexusGate is operation-aware SD-WAN/load-balancing first. Bonding via VPS is optional. The project is a prompts/scripts/config overlay for OpenMPTCProuter/OpenWrt and uses the native LuCI/OMR web UI.
+NexusGate is operation-aware SD-WAN/load-balancing first. The project is a prompts/scripts/config overlay for OpenMPTCProuter/OpenWrt and uses the native LuCI/OMR web UI.
 
 ## Core principle
 
@@ -40,11 +40,11 @@ Use built-in OpenMPTCProuter/OpenWrt LuCI:
 - `luci-app-mwan3` for WAN balancing/failover.
 - `luci-app-sqm` for CAKE.
 - `luci-app-statistics` / `luci-app-vnstat` for graphs/accounting.
-- OMR LuCI pages for optional bonding/bypass.
+- OMR LuCI pages for multipath and bypass controls.
 
-## Optional mode: VPS bonding
+## Advanced multipath
 
-Use OpenMPTCProuter ShadowSocks/Glorytun only when a single flow must exceed one WAN. This adds VPS cost and latency, so it is not default.
+OpenMPTCProuter can use MPTCP/ShadowSocks/Glorytun for advanced single-flow multipath scenarios when an external endpoint is configured. NexusGate keeps this separate from the default SD-WAN policy.
 
 ## Limits
 
