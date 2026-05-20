@@ -1,0 +1,1 @@
+export default function Page(){return <><h1>Failover</h1><div className="grid"><div className="card"><h3>4G signal</h3><p>Live data via API.</p></div><div className="card"><h3>carrier</h3><p>Live data via API.</p></div><div className="card"><h3>trigger history</h3><p>Live data via API.</p></div><div className="card"><h3>manual toggle</h3><p>Live data via API.</p></div></div></>}

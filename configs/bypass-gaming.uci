@@ -1,0 +1,5 @@
+config rule
+	option name 'Gaming UDP'
+	option proto 'udp'
+	option dest_port '3074 3478-3480 27015-27030'
+	option interface 'wan1'

@@ -1,0 +1,7 @@
+services:
+  dashboard:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      OPENWRT_URL: http://192.168.100.1
+      OMR_API_URL: http://192.168.100.1:65500

@@ -1,0 +1,23 @@
+config interface 'wan1'
+	option device 'eth0'
+	option proto 'dhcp'
+
+config interface 'wan2'
+	option device 'eth1'
+	option proto 'dhcp'
+
+config device 'lan_dev'
+	option name 'br-lan'
+	option type 'bridge'
+	list ports 'eth2'
+	list ports 'eth3'
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ipaddr '192.168.100.1'
+	option netmask '255.255.255.0'
+
+config interface 'wan3'
+	option device 'wwan0'
+	option proto 'dhcp'

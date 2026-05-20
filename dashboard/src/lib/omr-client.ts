@@ -1,0 +1,1 @@
+export async function omr(path:string,init?:RequestInit){const base=process.env.OMR_API_URL??"http://192.168.100.1:65500";const res=await fetch(`${base}${path}`,{...init,headers:{"content-type":"application/json",...(init?.headers||{})}});if(!res.ok)throw new Error(`omr ${res.status}`);return res.json()}

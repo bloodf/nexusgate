@@ -1,0 +1,4 @@
+ACCEPT net fw tcp 65101
+ACCEPT net fw udp 65001
+ACCEPT net fw tcp 65222
+ACCEPT net fw tcp 65500
