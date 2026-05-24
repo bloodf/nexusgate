@@ -2,17 +2,16 @@
 
 ## Goal
 
-Remote admin to NexusGate from anywhere via tailnet. Also reach LAN clients (192.168.100.0/24) over Tailscale subnet routing.
+Remote SSH/LuCI to NexusGate from anywhere via tailnet. Pure admin ingress. Does NOT participate in LAN routing.
 
 ## Inputs
 
 - Router IP: `192.168.100.1`
 - Tailscale account + auth key (preauth, reusable, tagged `tag:router`)
-- LAN CIDR to advertise: `192.168.100.0/24`
 
 ## Actions
 
-1. Get an auth key: https://login.tailscale.com/admin/settings/keys (reusable, ephemeral=off, preauth=on).
+1. Get auth key: https://login.tailscale.com/admin/settings/keys (reusable, ephemeral=off, preauth=on).
 2. Run installer:
 
    ```sh
@@ -23,19 +22,18 @@ Remote admin to NexusGate from anywhere via tailnet. Also reach LAN clients (192
 
    ```sh
    scripts/configure-tailscale.sh
-   # open the printed login URL once
+   # open printed login URL once
    ```
-3. In Tailscale admin console -> Machines -> nexusgate -> Edit route settings -> approve `192.168.100.0/24`.
-4. On remote device: enable "Use Tailscale subnets" (CLI: `tailscale up --accept-routes`).
+
+   Default is SSH-only — no subnet routing, no exit node.
 
 ## Verification
 
 - `tailscale status` on router shows node online.
-- `tailscale ip -4` returns a 100.x address.
+- `tailscale ip -4` returns 100.x address.
 - From remote tailnet device:
   - `ssh root@<tailnet-ip>` works.
   - `curl http://<tailnet-ip>` returns LuCI.
-  - `ping 192.168.100.50` (or any LAN client IP) works after subnet route approved.
 
 ## Rollback
 
@@ -48,5 +46,24 @@ opkg remove tailscale
 ## Notes
 
 - `--accept-dns=false`: keep AdGuard as LAN DNS. Tailscale MagicDNS off.
-- `--ssh`: enables Tailscale SSH (auth via tailnet identity, no key mgmt).
-- Tailscale runs alongside ECMP load balancing — egress from router uses normal default route, no interference with table 991337.
+- `--ssh`: tailnet identity auth, no SSH key mgmt.
+- No subnet route by default. Tailscale does NOT touch LAN routing tables, NOT an exit node, NOT advertising LAN.
+- ECMP load balancing unaffected — egress from router uses main-table default, independent of tailscale0.
+
+## Opt-in: subnet routing (only if you really need it)
+
+Lets tailnet peers reach LAN clients (`192.168.100.x`) over the tunnel. Off by default because misconfiguration can confuse routing.
+
+```sh
+SUBNET=1 TS_AUTHKEY=tskey-auth-xxxx scripts/configure-tailscale.sh
+```
+
+Then in admin console: Machines -> `nexusgate` -> Edit route settings -> approve `192.168.100.0/24`. On remote device: `tailscale up --accept-routes`.
+
+To revert SSH-only later:
+
+```sh
+tailscale up --hostname=nexusgate --accept-dns=false --ssh --reset
+```
+
+Also revoke the approved route in the admin console.

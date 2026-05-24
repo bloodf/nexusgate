@@ -1,8 +1,8 @@
 # Tailscale
 
-Remote ingress to NexusGate from anywhere. Runs alongside ECMP load balancing without interference.
+Remote SSH/LuCI ingress to NexusGate from anywhere. **SSH-only by default** — does NOT participate in LAN routing, NOT an exit node, NOT advertising LAN subnets. Pure admin path.
 
-## Install + first login
+## Install + first login (SSH-only, default)
 
 ```sh
 ssh root@192.168.100.1
@@ -11,29 +11,42 @@ opkg install tailscale
 /etc/init.d/tailscale enable
 /etc/init.d/tailscale start
 
-tailscale up \
-  --hostname=nexusgate \
-  --advertise-routes=192.168.100.0/24 \
-  --accept-dns=false \
-  --ssh
+tailscale up --hostname=nexusgate --accept-dns=false --ssh
 ```
 
 Open printed `https://login.tailscale.com/a/...` URL, log in, approve node.
 
-In admin console: Machines -> `nexusgate` -> Edit route settings -> approve `192.168.100.0/24`.
-
 Non-interactive (preauth key from https://login.tailscale.com/admin/settings/keys):
 
 ```sh
-tailscale up --authkey=tskey-auth-xxxx --hostname=nexusgate \
-  --advertise-routes=192.168.100.0/24 --accept-dns=false --ssh
+tailscale up --authkey=tskey-auth-xxxx --hostname=nexusgate --accept-dns=false --ssh
 ```
 
-Or via repo installer:
+Or via repo installer (SSH-only default):
 
 ```sh
 TS_AUTHKEY=tskey-auth-xxxx scripts/configure-tailscale.sh
 ```
+
+## Revert from subnet-routing mode back to SSH-only
+
+If subnet routing was enabled previously and you want pure SSH-only:
+
+```sh
+tailscale up --hostname=nexusgate --accept-dns=false --ssh --reset
+```
+
+`--reset` drops `--advertise-routes` and any prior flags. Then revoke the previously approved `192.168.100.0/24` route in the admin console.
+
+## Opt-in: subnet routing
+
+Only needed if tailnet peers must reach LAN clients (`192.168.100.x`) over tunnel.
+
+```sh
+SUBNET=1 TS_AUTHKEY=tskey-auth-xxxx scripts/configure-tailscale.sh
+```
+
+Then admin console: Machines -> `nexusgate` -> Edit route settings -> approve `192.168.100.0/24`. Peer: `tailscale up --accept-routes`.
 
 ## How traffic flows now
 
