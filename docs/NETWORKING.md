@@ -22,6 +22,41 @@ Will be applied via OMR bypass or fwmark rules for:
 - Video calls if needed
 - Banking/login-sensitive domains
 
+## Interface map
+
+| Interface | Type | Subnet / addr | Role |
+|---|---|---|---|
+| `eth0` | physical | (in br-lan) | LAN/mgmt port; bridged |
+| `eth3` | physical | (in br-lan) | LAN downlink to home Wi-Fi router; bridged |
+| `br-lan` | bridge | 192.168.100.1/24 | LAN side, DHCP server |
+| `eth1` | physical | (pppoe parent) | Fiber WAN physical |
+| `pppoe-wan1` | pppoe | public IPv4 from Vivo | Fiber WAN logical |
+| `eth2` | physical | private DHCP from cable modem | Coax WAN (double-NAT v1) |
+| `tailscale0` | wireguard | 100.x.y.z/32 | Tailnet ingress + subnet route |
+
+## Traffic flow matrix
+
+| Source | Destination | Path | Table |
+|---|---|---|---|
+| LAN client | Internet | br-lan -> ip rule iif br-lan -> ECMP (per-flow nexthop) -> pppoe-wan1 or eth2 | 991337 |
+| Router itself | Internet | main default (lowest metric) | main |
+| LAN client | LAN client | br-lan switching, no IP routing | n/a |
+| LAN client | NexusGate LuCI/SSH | direct on br-lan to 192.168.100.1 | local |
+| Tailnet peer | NexusGate LuCI/SSH | tailscale0 to 100.x.y.z | local |
+| Tailnet peer | LAN client | tailscale0 -> br-lan (subnet route) | main |
+| NexusGate | Tailnet peer (DERP/keepalive) | main default | main |
+| LAN client (DNS) | dnsmasq :53 | br-lan -> dnsmasq -> 127.0.0.1:5354 (AdGuard) -> DoH upstream | local + WAN |
+
+## DNS chain
+
+```text
+LAN client :53 -> dnsmasq (router :53) -> AdGuard Home (127.0.0.1:5354)
+                                              -> filter lists (block ads/trackers)
+                                              -> DoH upstream (Cloudflare/Google)
+```
+
+AdGuard filter lists bootstrapped by `scripts/configure-adguard-filters.sh` (AdGuard DNS filter, AdAway, Tracking Protection, Popup Hosts).
+
 ## Expected behavior
 
 | Workload | Result |

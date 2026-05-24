@@ -97,4 +97,6 @@ A single TCP flow cannot be split across two WANs without MPTCP multipath. Multi
 - **Device/App Policy Routing**: optional overrides via OMR bypass / fwmark rules (roadmap).
 - **Advanced multipath**: MPTCP/OMR endpoint support for single-flow >1Gb scenarios.
 
+See `ARCHITECTURE.md` for full data-flow diagram and `docs/TAILSCALE.md` for remote-access details.
+
 License: MIT.

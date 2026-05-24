@@ -31,6 +31,61 @@ Replacement: kernel ECMP multipath in OMR's existing balanced routing table `991
 
 Sticky exceptions (gaming/VoIP/banking) via OMR bypass / fwmark rules. Not active in v1 ECMP-only baseline.
 
+## Remote access (Tailscale)
+
+Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate`, advertises `192.168.100.0/24` subnet route, exposes Tailscale SSH on its `100.x.y.z` tailnet IP.
+
+- Tailscale interface: `tailscale0` (WireGuard-over-UDP, peer-discovered via DERP relays + NAT punch).
+- Egress from router: uses normal main-table default (independent of ECMP table 991337). No interference with WAN load balancing.
+- Ingress from tailnet: SSH/LuCI/AdGuard UI reachable on tailnet IP from any approved peer, anywhere.
+- Subnet routing: peers with `--accept-routes` reach LAN clients (e.g. `192.168.100.50`) without being on LAN physically.
+- DNS: `--accept-dns=false` keeps AdGuard as authoritative LAN resolver; tailnet MagicDNS off.
+
+## Full data flow
+
+```text
+                  Internet
+                 /        \
+        Vivo Fibra        Cable ISP
+        (PPPoE auth        (DHCP)
+         at OLT)              |
+            |                 |
+       GPON ONT          Coax Modem
+       (bridge)          (router mode,
+            |             double-NAT v1)
+            |                 |
+    pppoe-wan1 / eth1     eth2 / wan2
+            \                 /
+             \               /
+              \             /
+        +-----------------------+
+        |   NexusGate (OMR)     |
+        |                       |
+        |  ECMP table 991337    |   <-- L4 hash, per-flow nexthop
+        |  + ip rule iif br-lan |
+        |  + post-tracking hook |
+        |                       |
+        |  dnsmasq :53 (LAN)    |
+        |   -> 127.0.0.1:5354   |
+        |       AdGuard Home    |   <-- 4 filter lists
+        |       -> upstream DoH |
+        |                       |
+        |  tailscale0 (WG/UDP)  |   <-- ingress from anywhere
+        |   advertises          |
+        |   192.168.100.0/24    |
+        +-----------------------+
+              |          |
+           eth0        eth3
+        (admin PC)   (home Wi-Fi router,
+                      AP mode preferred)
+              \          /
+               \        /
+            br-lan 192.168.100.0/24
+                    |
+              LAN clients
+              (DHCP from NexusGate)
+```
+
 ## Web UI
 
 - `luci-app-sqm` for CAKE.
