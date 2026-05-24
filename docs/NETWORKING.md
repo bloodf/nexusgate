@@ -2,6 +2,36 @@
 
 NexusGate balances by operation/flow, not by machine.
 
+## LAN topology (eth3 → unmanaged switch)
+
+`eth3` is the LAN trunk to a TP-Link 1Gb unmanaged switch. All downstream devices share `192.168.100.0/24`.
+
+| Switch port | Device | Notes |
+|---:|---|---|
+| 1 | TP-Link Deco BE65 (main) | AP mode; other 4 Decos mesh wirelessly |
+| 2 | CortexOS local VPS | Reserved `192.168.100.10` (MAC `40:9c:a7:49:4b:62`) |
+| 3 | WD NAS | Dynamic; firmware-configured static `.187` left in place |
+
+Deco mesh (5x BE65) is in **Access Point mode**: all 5 Decos pull DHCP from NexusGate, all Wi-Fi clients land directly on `192.168.100.0/24`, AdGuard sees every query, ECMP balances every flow. Reservations intentionally not used for Decos.
+
+DHCP pool = `192.168.100.50-249`. Static infra range `2-49` reserved.
+DNS push (DHCP option 6) = `192.168.100.1` so every client uses the dnsmasq → AdGuard chain.
+
+## SQM / CAKE
+
+Both WANs shaped at 95% of plan for bufferbloat control:
+
+| WAN | Interface | Down (Kbps) | Up (Kbps) | Linklayer | Overhead |
+|---|---|---:|---:|---|---:|
+| Vivo Fibra (1G/500M) | `pppoe-wan1` | 950 000 | 475 000 | ethernet | 44 (PPPoE) |
+| Claro Coaxial (1G/100M) | `eth2` | 950 000 | 95 000 | ethernet | 18 (DOCSIS) |
+
+Apply via `scripts/configure-sqm.sh` (override per env vars). CAKE shapes ingress via `ifb4*` interfaces automatically.
+
+## Tailscale DNS intercept
+
+Removed Tailscale leaves clients with `100.100.100.100` in their static DNS config — those packets get routed to the public Internet and dropped. `scripts/configure-dns-intercept.sh` installs an `fw4` DNAT rule that rewrites `100.100.100.100:53` (UDP+TCP) → `192.168.100.1:53` (dnsmasq → AdGuard), so clients keep working without reconfiguration.
+
 ## Default policy: kernel ECMP
 
 - Kernel multipath in OMR table `991337` with two equal-cost nexthops (wan1, wan2).
@@ -29,9 +59,9 @@ Will be applied via OMR bypass or fwmark rules for:
 | `eth0` | physical | (in br-lan) | LAN/mgmt port; bridged |
 | `eth3` | physical | (in br-lan) | LAN downlink to home Wi-Fi router; bridged |
 | `br-lan` | bridge | 192.168.100.1/24 | LAN side, DHCP server |
-| `eth1` | physical | (pppoe parent) | Fiber WAN physical |
-| `pppoe-wan1` | pppoe | public IPv4 from Vivo | Fiber WAN logical |
-| `eth2` | physical | private DHCP from cable modem | Coax WAN (double-NAT v1) |
+| `eth1` | physical | (pppoe parent) | Vivo Fibra WAN physical |
+| `pppoe-wan1` | pppoe | public IPv4 from Vivo | Vivo Fibra WAN logical (label: "Vivo Fibra") |
+| `eth2` | physical | private DHCP from Claro cable modem | Claro Coaxial WAN (double-NAT v1, label: "Claro Coaxial") |
 | `tailscale0` | wireguard | 100.x.y.z/32 | Tailnet ingress + subnet route |
 
 ## Traffic flow matrix

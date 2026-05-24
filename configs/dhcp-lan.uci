@@ -1,6 +1,30 @@
 config dhcp 'lan'
 	option interface 'lan'
-	option start '100'
-	option limit '150'
+	option start '50'
+	option limit '200'
 	option leasetime '12h'
 	option ignore '0'
+	option dhcpv4 'server'
+	option dhcpv6 'server'
+	option ra 'server'
+	option ra_management '1'
+	option ra_default '1'
+	list dhcp_option '6,192.168.100.1'
+
+# Static reservations.
+# Range 2-49 reserved for infra (router .1, CortexOS .10, future fixed services).
+# Pool is 50-249. Wi-Fi clients via Decos (AP mode) and wired hosts go in pool.
+
+config host
+	option name 'cortexos'
+	option mac '40:9c:a7:49:4b:62'
+	option ip '192.168.100.10'
+
+# Decos (5x BE65 in AP mode) intentionally NOT reserved — dynamic addresses are fine,
+# they manage themselves through the Deco mesh and we don't manage them by IP.
+# Known MACs:
+#   bc:07:1d:c1:58:5a   Escritorio
+#   bc:07:1d:c1:5d:94   Suite Casal
+#   bc:07:1d:c1:58:84   Quarto Visita
+#   bc:07:1d:c1:82:72   Quarto Bebê
+#   (5th main Deco MAC TBD)
