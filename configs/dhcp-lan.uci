@@ -1,6 +1,30 @@
 config dhcp 'lan'
 	option interface 'lan'
-	option start '100'
-	option limit '150'
+	option start '50'
+	option limit '200'
 	option leasetime '12h'
 	option ignore '0'
+	option dhcpv4 'server'
+	option dhcpv6 'server'
+	option ra 'server'
+	option ra_management '1'
+	option ra_default '1'
+	list dhcp_option '6,192.168.100.1'
+
+# Static reservations (range 2-49 reserved for infra; pool is 50-249).
+# Add one block per device. MACs are examples — replace with real values.
+
+config host
+	option name 'home-router'
+	option mac '68:1d:ef:38:c8:18'
+	option ip '192.168.100.2'
+
+config host
+	option name 'wd-nas'
+	option mac '00:00:c0:39:ad:1b'
+	option ip '192.168.100.3'
+
+# config host
+#	option name 'cortexos'
+#	option mac 'XX:XX:XX:XX:XX:XX'
+#	option ip '192.168.100.4'

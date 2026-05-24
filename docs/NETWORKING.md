@@ -2,6 +2,22 @@
 
 NexusGate balances by operation/flow, not by machine.
 
+## LAN topology (eth3 → unmanaged switch)
+
+`eth3` is the LAN trunk to a TP-Link 1Gb unmanaged switch. All downstream devices share `192.168.100.0/24`.
+
+| Switch port | Device | MAC | IP | Notes |
+|---:|---|---|---|---|
+| 1 | TP-Link Deco BE65 (home Wi-Fi) | `68:1d:ef:38:c8:18` | `192.168.100.2` (reserved) | Must be in AP/Bridge mode |
+| 2 | CortexOS local VPS | `XX:XX:XX:XX:XX:XX` | `192.168.100.4` (reserved) | |
+| 3 | WD NAS | `00:00:c0:39:ad:1b` | `192.168.100.3` (reserved) | |
+
+DHCP pool = `192.168.100.50-249`. Static infra range `2-49` reserved. Reservations defined in `configs/dhcp-lan.uci`.
+
+**Critical**: Deco must be in **Access Point** mode (Deco app → More → Advanced → Operating Mode). Router mode = double-NAT for Wi-Fi clients, AdGuard sees only Deco source IP, ECMP still works but per-client visibility lost.
+
+DNS push (DHCP option 6) = `192.168.100.1` so every client uses dnsmasq → AdGuard chain.
+
 ## Default policy: kernel ECMP
 
 - Kernel multipath in OMR table `991337` with two equal-cost nexthops (wan1, wan2).
