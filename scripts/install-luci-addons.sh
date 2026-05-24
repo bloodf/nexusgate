@@ -5,7 +5,6 @@ opkg update
 opkg install \
   luci \
   luci-ssl \
-  luci-app-mwan3 \
   luci-app-sqm \
   luci-app-statistics \
   collectd \

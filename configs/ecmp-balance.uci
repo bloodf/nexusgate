@@ -1,0 +1,18 @@
+# Per-connection kernel ECMP load balancing for OpenMPTCProuter.
+#
+# OMR is nftables-only on kernel 6.6; mwan3 cannot install (its
+# iptables-mod-conntrack-extra dep is unavailable). NexusGate therefore uses
+# kernel multipath ECMP via OMR's existing balanced routing table 991337,
+# maintained by a post-tracking hook (see scripts/ecmp-balance.sh installed
+# to /usr/share/omr/post-tracking.d/099-ecmp-balance).
+#
+# This file documents the touched-by-installer UCI knobs. It is not loaded
+# verbatim. scripts/configure-load-balancing.sh applies the equivalent settings.
+
+# OMR per-WAN multipath flags. Both must be 'on' so OMR populates per-WAN
+# routing tables (table 6 = wan1, table 10 = wan2) that ECMP reads from.
+# network.wan1.multipath = on
+# network.wan2.multipath = on
+
+# OMR balancing master switch.
+# openmptcprouter.settings.master = balancing

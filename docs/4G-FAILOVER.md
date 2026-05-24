@@ -1,6 +1,8 @@
 # 4G Failover
 
-Configure QMI/MBIM modem as wan3. mwan3 uses wan3 metric 2 backup.
+**Out of scope for v1 / current deployment. wwan0 not present, no SIM modem.**
+
+Future work: configure QMI/MBIM modem as wan3, integrate into ECMP table 991337 only as fallback (or via separate failover rule).
 
 ## Verification
 

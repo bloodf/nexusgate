@@ -1,15 +1,17 @@
-config interface 'wan1'
-	option device 'eth0'
-	option proto 'dhcp'
+# NexusGate physical NIC assignment.
+#
+# Wiring (matches deployed v1 hardware):
+#   eth0 -> LAN / management port (admin PC, also bridged with eth3)
+#   eth1 -> Fiber WAN  (TP-Link GPON ONT, Vivo Fibra PPPoE)
+#   eth2 -> Coax WAN   (cable modem in router mode, DHCP, double-NAT acceptable)
+#   eth3 -> LAN downlink to home Wi-Fi router (bridged with eth0 in br-lan)
+#
+# NOTE: legacy wwan0/4G config removed. Cellular failover is out of scope for v1.
 
-config interface 'wan2'
-	option device 'eth1'
-	option proto 'dhcp'
-
-config device 'lan_dev'
+config device 'br_lan'
 	option name 'br-lan'
 	option type 'bridge'
-	list ports 'eth2'
+	list ports 'eth0'
 	list ports 'eth3'
 
 config interface 'lan'
@@ -18,6 +20,30 @@ config interface 'lan'
 	option ipaddr '192.168.100.1'
 	option netmask '255.255.255.0'
 
-config interface 'wan3'
-	option device 'wwan0'
+# Fiber WAN. Vivo Fibra uses generic OLT-authenticated PPPoE; real auth happens
+# at the OLT via ONT serial number, so "cliente@cliente" / "cliente" works for
+# any Vivo Fibra circuit when the ONT is in BRIDGE mode.
+#
+# If the GPON ONT is in ROUTER mode instead, it terminates PPPoE itself and
+# hands eth1 a private DHCP lease. In that case override proto to 'dhcp' and
+# accept the double-NAT (see prompts/04-wan-config.md ONT detection flow).
+config interface 'wan1'
+	option device 'eth1'
+	option proto 'pppoe'
+	option username 'cliente@cliente'
+	option password 'cliente'
+	option ipv6 '0'
+	option defaultroute '0'
+	option peerdns '0'
+	option metric '10'
+	option multipath 'on'
+
+# Coax WAN. Cable modem stays in router mode for v1 (private DHCP lease, double
+# NAT). Per-flow ECMP still works; revisit modem bridge mode for full perf.
+config interface 'wan2'
+	option device 'eth2'
 	option proto 'dhcp'
+	option defaultroute '0'
+	option peerdns '0'
+	option metric '20'
+	option multipath 'on'

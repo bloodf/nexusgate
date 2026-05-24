@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
-echo "Manual: unplug WAN1+WAN2; verify wan3 online: mwan3 status"
-mwan3 status || true
+echo "Manual: unplug WAN1 (eth1) or WAN2 (eth2); verify other survives in table 991337."
+ip route show table 991337 || true
+ip rule show | grep 991337 || true

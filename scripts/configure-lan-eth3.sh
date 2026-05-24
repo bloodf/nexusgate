@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+# Wiring: eth0 = LAN/management (admin PC), eth3 = LAN downlink to home Wi-Fi router.
+# Both bridged into br-lan.
+
 LAN_IP=${LAN_IP:-192.168.100.1}
 LAN_NETMASK=${LAN_NETMASK:-255.255.255.0}
 DHCP_START=${DHCP_START:-100}
@@ -8,12 +11,12 @@ DHCP_LIMIT=${DHCP_LIMIT:-150}
 DHCP_LEASETIME=${DHCP_LEASETIME:-12h}
 
 uci batch <<EOF
-# Bridge eth2 + eth3 as LAN. eth3 is intended for home Wi-Fi router WAN/AP uplink.
+# Bridge eth0 + eth3 as LAN. eth3 is the home Wi-Fi router uplink.
 set network.lan_dev=device
 set network.lan_dev.name='br-lan'
 set network.lan_dev.type='bridge'
 delete network.lan_dev.ports 2>/dev/null || true
-add_list network.lan_dev.ports='eth2'
+add_list network.lan_dev.ports='eth0'
 add_list network.lan_dev.ports='eth3'
 
 set network.lan=interface
@@ -37,5 +40,5 @@ EOF
 /etc/init.d/dnsmasq enable
 /etc/init.d/dnsmasq restart
 
-echo "LAN DHCP active on eth2+eth3 via br-lan at $LAN_IP"
+echo "LAN DHCP active on eth0+eth3 via br-lan at $LAN_IP"
 echo "Connect home Wi-Fi router WAN/AP uplink to eth3. It will receive DHCP."

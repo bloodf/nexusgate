@@ -1,5 +1,7 @@
 # 09 4G Failover
 
+**Out of scope for v1 deployment. wwan0 not wired, no SIM modem. Skip unless adding cellular later.**
+
 ## Goal
 Execute NexusGate step `4g-failover` safely on OpenMPTCProuter.
 

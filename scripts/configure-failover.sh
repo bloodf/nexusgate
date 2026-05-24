@@ -1,16 +1,5 @@
 #!/bin/sh
-set -eu
-opkg update; opkg install mwan3 luci-app-mwan3 umbim uqmi kmod-usb-net-qmi-wwan || true
-uci batch <<'EOF'
-set network.wan3=interface
-set network.wan3.proto='qmi'
-set network.wan3.device='/dev/cdc-wdm0'
-set network.wan3.apn='internet'
-set mwan3.wan3=interface
-set mwan3.wan3.enabled='1'
-set mwan3.wan3.family='ipv4'
-set mwan3.wan3.reliability='1'
-commit network
-commit mwan3
-EOF
-/etc/init.d/network reload; /etc/init.d/mwan3 restart
+# Out of scope for v1: wwan0 not wired, no SIM modem.
+# mwan3 unsupported on OMR; future 4G integration must hook into table 991337.
+echo "configure-failover.sh: 4G/LTE out of scope v1. No-op."
+exit 0
