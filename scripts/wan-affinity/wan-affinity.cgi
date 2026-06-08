@@ -152,7 +152,7 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 		# 4. Cap at 48 chars.
 		safe_name=$(printf '%s' "$post_name" \
 			| tr -d '\r\n|' \
-			| sed 's/[[:space:]][[:space:]]*/  /g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
+			| sed 's/[[:space:]][[:space:]]*/ /g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
 			| cut -c1-48)
 
 		# Atomically rewrite names.list: write all lines except the existing entry
