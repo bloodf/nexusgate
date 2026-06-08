@@ -2,7 +2,7 @@
 
 Run prompts in numeric order. Stop at each checkpoint. Never proceed if verification fails.
 
-1. 00-04: base router, NICs, LAN bridge (eth0+eth3), WAN discovery. Fiber WAN PPPoE via `scripts/configure-wan-pppoe.sh` (Vivo Fibra creds `cliente@cliente`/`cliente`, GPON ONT bridge/router-mode detection).
+1. 00-04: base router, NICs, LAN bridge (eth0+eth3), WAN discovery. WAN1 PPPoE via `scripts/configure-wan-pppoe.sh` (set `<pppoe-username>`/`<pppoe-password>` for your ISP; see [Reference deployment in README](README.md#reference-deployment) for example values). GPON ONT bridge/router-mode auto-detection included.
 2. 05: ECMP load balancing via `scripts/configure-load-balancing.sh`. mwan3 unsupported on OMR (nftables-only, missing `iptables-mod-conntrack-extra`). Kernel ECMP in table 991337 + post-tracking hook instead.
 3. 06: OMR advanced multipath settings when required.
 4. 07-08: SQM, policy routing.

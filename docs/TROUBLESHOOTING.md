@@ -8,26 +8,26 @@ Real issues hit during deployment, with fixes.
 > *active* policy are **legacy** — kept for history. ECMP table 991337 still
 > exists (OMR core rebuilds it) but is shadowed by the affinity rules.
 
-## Which WAN is a device on? / lock a device to Claro or Vivo
+## Which WAN is a device on? / lock a device to WAN2 or WAN1
 
 ```sh
 # What MACs are pinned where (live nft chain):
 nft list chain inet fw4 wan_affinity
 
 # Routing decision for a device by MAC's mark, or for default LAN:
-ip route get 1.1.1.1 mark 0x10000          # Vivo-locked  -> table 100 / pppoe-wan1
-ip route get 1.1.1.1 mark 0x20000          # Claro-locked -> table 101 / eth2
+ip route get 1.1.1.1 mark 0x10000          # WAN1-locked  -> table 100 / pppoe-wan1
+ip route get 1.1.1.1 mark 0x20000          # WAN2-locked -> table 101 / eth2
 ip route get 1.1.1.1 from 192.168.100.50 iif br-lan   # default LAN -> table 100
 
 # Current device list (IP / MAC / hostname):
 cat /tmp/dhcp.leases
 ```
 
-Lock a device to Claro (or change which devices are Claro-only):
+Lock a device to WAN2 (or change which devices are WAN2-only):
 
 ```sh
-# Re-run the installer with the full Claro MAC list (space-separated, lowercase):
-CLARO_MACS="40:f6:bc:38:df:7c 44:d5:cc:e5:ad:a7 1c:fe:2b:f3:84:fc a8:a0:92:2f:9a:dc <new:mac>" \
+# Re-run the installer with the full WAN2 MAC list (space-separated, lowercase):
+WAN2_MACS="<mac:addr:1> <mac:addr:2> <mac:addr:3> <new:mac>" \
   sh /root/configure-wan-affinity.sh
 ```
 
@@ -105,21 +105,21 @@ Expected: OMR sets `defaultroute=0` on WANs. Don't use ubus for route discovery;
 Cause: `/etc/adguardhome.yaml` has no `filters:` entries.
 Fix: `scripts/configure-adguard-filters.sh` injects 4 AdGuard filter URLs (ids 1, 2, 11, 15) and restarts service.
 
-## Fiber WAN no IP
+## WAN1 (fiber/PPPoE) no IP
 
 `ifstatus wan1` returns nothing on PPPoE.
 Causes / fixes:
 
 - ONT in router mode → wan1 should be `proto=dhcp`, not pppoe. Re-run `scripts/configure-wan-pppoe.sh`; it auto-detects.
-- PPPoE creds wrong → try `cpf@vivo.com.br` variant. Generic `cliente@cliente`/`cliente` works in most Vivo OLT regions because the OLT authenticates by ONT serial.
-- ONT not registered at OLT → call Vivo to provision the ONT serial.
+- PPPoE credentials wrong → verify username/password with your ISP. (Reference deployment used generic `cliente@cliente`/`cliente` for Vivo Fibra — OLT authenticates by ONT serial, not credentials.)
+- ONT not registered at OLT → contact your ISP to provision the ONT serial.
 
-## Claro WAN marked down / ~50% connections fail (ECMP + ICMP block)
+## WAN2 marked down / ~50% connections fail (omr-tracker ICMP block)
 
-Symptoms: intermittent drops, `openmptcprouter.wan2.state=down`, table 14 shows
-`default via 200.204.204.206 dev eth2` (Vivo gateway on wrong interface).
+Symptoms: intermittent drops, `openmptcprouter.wan2.state=down`, table 10 shows
+a stale or incorrect default route on `eth2`.
 
-Cause: default omr-tracker pings 1.1.1.1 / 8.8.8.8. Claro blocks ICMP upstream.
+Cause: default omr-tracker pings 1.1.1.1 / 8.8.8.8. Some ISPs block ICMP upstream.
 Tracker marks wan2 DOWN → OMR installs broken down-state routes → ECMP still
 hashes ~50% of flows to dead path.
 
@@ -136,15 +136,15 @@ Verify:
 
 ```sh
 uci get openmptcprouter.wan2.state    # expect up
-curl --interface eth2 https://api.ipify.org   # Claro public IP
-ip route show table 101               # Claro single nexthop (eth2) when up
+curl --interface eth2 https://api.ipify.org   # WAN2 public IP
+ip route show table 101               # WAN2 single nexthop (eth2) when up
 ```
 
 ## Third-party DNS / DoH upstream
 
 AdGuard must use ISP plain DNS, not Cloudflare/Google/Quad9 DoH. Run
-`scripts/configure-isp-dns.sh`. Resolvers are policy-routed: Vivo DNS → table 6,
-Claro DNS → table 10.
+`scripts/configure-isp-dns.sh`. Resolvers are policy-routed: WAN1 DNS → table 6,
+WAN2 DNS → table 10.
 
 
 ```sh

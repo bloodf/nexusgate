@@ -11,8 +11,8 @@ Single TCP/UDP flow cannot be split across two WANs without bonding/MPTCP. Per-o
 ## Topology
 
 - `eth0` → LAN / management; bridged with eth3 in `br-lan`
-- `eth1` → WAN1 Fiber PPPoE (Vivo Fibra via TP-Link GPON ONT)
-- `eth2` → WAN2 Coax DHCP (cable modem in router mode, double-NAT v1)
+- `eth1` → WAN1 (primary, e.g. PPPoE/fiber) via GPON ONT or fiber modem
+- `eth2` → WAN2 (secondary, e.g. DHCP/cable) via cable modem in router mode, double-NAT v1
 - `eth3` → LAN downlink to home Wi-Fi router; bridged with eth0
 - No wwan0 / 4G in v1
 
@@ -46,13 +46,12 @@ Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate
 ```text
                   Internet
                  /        \
-        Vivo Fibra        Cable ISP
-        (PPPoE auth        (DHCP)
-         at OLT)              |
+        WAN1 (primary)    WAN2 (secondary)
+        (e.g. PPPoE/fiber) (e.g. DHCP/cable)
             |                 |
-       GPON ONT          Coax Modem
-       (bridge)          (router mode,
-            |             double-NAT v1)
+       GPON ONT /        Cable/DSL Modem
+       Fiber Modem        (router mode,
+       (bridge)            double-NAT v1)
             |                 |
     pppoe-wan1 / eth1     eth2 / wan2
             \                 /

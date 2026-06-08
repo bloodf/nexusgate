@@ -1,17 +1,17 @@
 # 04 WAN Config
 
 ## Goal
-Bring up WAN1 (Fiber PPPoE) and WAN2 (Coax DHCP) on real deployed wiring.
+Bring up WAN1 (primary, e.g. PPPoE/fiber) and WAN2 (secondary, e.g. DHCP/cable).
 
 ## Inputs
 - Router IP: `192.168.100.1`
-- WAN roles: eth1 → wan1 (Vivo Fibra PPPoE), eth2 → wan2 (Coax DHCP)
+- WAN roles: eth1 → wan1 (primary PPPoE or DHCP), eth2 → wan2 (secondary DHCP)
 - LAN: eth0 + eth3 bridged → `br-lan`
-- Vivo PPPoE creds (generic, OLT auths via ONT serial): user `cliente@cliente`, pass `cliente`. Fallback: `cpf@vivo.com.br` variant.
+- WAN1 PPPoE credentials: `<pppoe-username>` / `<pppoe-password>` (obtain from your ISP; see [Reference deployment in README](../README.md#reference-deployment) for example values).
 
-## GPON ONT mode detection
+## GPON ONT / fiber modem mode detection
 
-TP-Link GPON ONT can be in:
+A GPON ONT or fiber modem can be in:
 
 - **Bridge mode**: router does PPPoE on eth1; gets public IP on `pppoe-wan1`.
 - **Router mode**: ONT does PPPoE itself; hands eth1 a private DHCP lease (10.x.x.x or 192.168.x.x). Double-NAT but works.

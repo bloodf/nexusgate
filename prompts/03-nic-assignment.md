@@ -1,14 +1,14 @@
 # 03 NIC Assignment
 
 ## Goal
-Map physical ports to NexusGate roles (real deployed wiring).
+Map physical ports to NexusGate roles.
 
 ## Assignment
 
-- eth0 → LAN / management (admin MacBook); bridged with eth3 in `br-lan`
-- eth1 → WAN1 Vivo Fibra (PPPoE) — TP-Link GPON ONT
-- eth2 → WAN2 Claro Coaxial (DHCP) — cable modem in router mode (double-NAT, modem can't bridge)
-- eth3 → LAN downlink to TP-Link 1Gb unmanaged switch; bridged with eth0
+- eth0 → LAN / management (admin PC); bridged with eth3 in `br-lan`
+- eth1 → WAN1 (primary, e.g. PPPoE/fiber) — GPON ONT or fiber modem
+- eth2 → WAN2 (secondary, e.g. DHCP/cable) — cable modem in router mode (double-NAT, modem can't bridge)
+- eth3 → LAN downlink to 1Gb unmanaged switch; bridged with eth0
 - No wwan0 / 4G in v1
 
 ## Switch topology (eth3 → unmanaged switch)
@@ -31,7 +31,7 @@ Deco mesh is in **AP mode**: NexusGate is sole gateway/DHCP/DNS for all Wi-Fi cl
 6. Connect admin PC to eth0 (or via switch on eth3).
 7. Connect switch to eth3; fan out to Deco main, CortexOS, NAS.
 8. Connect TP-Link GPON ONT to eth1.
-9. Connect Claro cable modem to eth2.
+9. Connect WAN2 cable modem to eth2.
 10. On Deco app: **More → Advanced → Operating Mode → Access Point**.
 
 ## Verification

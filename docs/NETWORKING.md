@@ -25,10 +25,10 @@ Both WANs shaped at 95% of plan for bufferbloat control:
 
 | WAN | Interface | Down (Kbps) | Up (Kbps) | Linklayer | Overhead |
 |---|---|---:|---:|---|---:|
-| Vivo Fibra (1G/500M) | `pppoe-wan1` | 950 000 | 475 000 | ethernet | 44 (PPPoE) |
-| Claro Coaxial (1G/100M) | `eth2` | 950 000 | 95 000 | ethernet | 18 (DOCSIS) |
+| WAN1 (primary, e.g. PPPoE/fiber 1G/500M) | `pppoe-wan1` | 950 000 | 475 000 | ethernet | 44 (PPPoE) |
+| WAN2 (secondary, e.g. DHCP/cable 1G/100M) | `eth2` | 950 000 | 95 000 | ethernet | 18 (DOCSIS) |
 
-Apply via `scripts/configure-sqm.sh` (override per env vars). CAKE shapes ingress via `ifb4*` interfaces automatically.
+Values shown are from the [reference deployment](../README.md#reference-deployment). Override via env vars when running `scripts/configure-sqm.sh`. CAKE shapes ingress via `ifb4*` interfaces automatically.
 
 ## Tailscale DNS intercept
 
@@ -43,10 +43,11 @@ migration rejected, anti-fraud resets). Apply via `scripts/configure-wan-affinit
 
 **Model**
 
-- **Vivo (wan1) is the default WAN** for every LAN device.
-- Devices whose MAC is in the **Claro lock list** egress Claro (wan2) — mostly
-  streaming boxes (Claro's ~950M down suits streaming; weak up is irrelevant for
-  download). Devices in the **Vivo lock list** are explicitly pinned to Vivo.
+- **WAN1 (primary) is the default WAN** for every LAN device.
+- Devices whose MAC is in the **WAN2 lock list** egress WAN2 (secondary) — e.g.
+  streaming boxes where WAN2's high downstream bandwidth suits the load; weak
+  upload is irrelevant for download workloads. Devices in the **WAN1 lock list**
+  are explicitly pinned to WAN1.
 - Both WANs carry traffic simultaneously across devices (offload, not single-flow
   aggregation). A single device is capped at one link (~1Gb); 2Gb single-flow is
   impossible without MPTCP+VPS bonding, which is out of scope.
@@ -55,9 +56,9 @@ migration rejected, anti-fraud resets). Apply via `scripts/configure-wan-affinit
 
 | Selector | Mark | `ip rule` | Table | Primary nexthop | Failover |
 |---|---|---|---|---|---|
-| Claro-locked MAC | `0x20000` | pri 41 | 101 | Claro (`eth2`) | Vivo (`pppoe-wan1`) |
-| Vivo-locked MAC | `0x10000` | pri 40 | 100 | Vivo (`pppoe-wan1`) | Claro (`eth2`) |
-| unmarked LAN | — | pri 45 `iif br-lan` | 100 | Vivo (default) | Claro |
+| WAN2-locked MAC | `0x20000` | pri 41 | 101 | WAN2 (`eth2`) | WAN1 (`pppoe-wan1`) |
+| WAN1-locked MAC | `0x10000` | pri 40 | 100 | WAN1 (`pppoe-wan1`) | WAN2 (`eth2`) |
+| unmarked LAN | — | pri 45 `iif br-lan` | 100 | WAN1 (default) | WAN2 |
 
 - Marking is an nft prerouting chain (`/etc/nftables.d/20-wan-affinity.nft`,
   priority -150) keyed on `ether saddr`. No `jhash`, no port folding.
@@ -85,17 +86,17 @@ To change a device's WAN, edit the lock lists and re-apply (see
 | `eth0` | physical | (in br-lan) | LAN/mgmt port; bridged |
 | `eth3` | physical | (in br-lan) | LAN downlink to home Wi-Fi router; bridged |
 | `br-lan` | bridge | 192.168.100.1/24 | LAN side, DHCP server |
-| `eth1` | physical | (pppoe parent) | Vivo Fibra WAN physical |
-| `pppoe-wan1` | pppoe | public IPv4 from Vivo | Vivo Fibra WAN logical (label: "Vivo Fibra") |
-| `eth2` | physical | private DHCP from Claro cable modem | Claro Coaxial WAN (double-NAT v1, label: "Claro Coaxial") |
+| `eth1` | physical | (pppoe parent) | WAN1 (primary) physical port |
+| `pppoe-wan1` | pppoe | public IPv4 from WAN1 ISP | WAN1 (primary) logical interface (label: "WAN1") |
+| `eth2` | physical | private DHCP from WAN2 cable/DSL modem | WAN2 (secondary) physical port (double-NAT v1, label: "WAN2") |
 | `tailscale0` | wireguard | 100.x.y.z/32 | Tailnet ingress + subnet route |
 
 ## Traffic flow matrix
 
 | Source | Destination | Path | Table |
 |---|---|---|---|
-| LAN client (default) | Internet | br-lan -> ip rule pri 45 iif br-lan -> single nexthop -> pppoe-wan1 (Vivo) | 100 |
-| LAN client (Claro-locked) | Internet | br-lan -> nft mark 0x20000 -> ip rule pri 41 -> single nexthop -> eth2 (Claro) | 101 |
+| LAN client (default) | Internet | br-lan -> ip rule pri 45 iif br-lan -> single nexthop -> pppoe-wan1 (WAN1) | 100 |
+| LAN client (WAN2-locked) | Internet | br-lan -> nft mark 0x20000 -> ip rule pri 41 -> single nexthop -> eth2 (WAN2) | 101 |
 | Router itself | Internet | main default (lowest metric) | main |
 | LAN client | LAN client | br-lan switching, no IP routing | n/a |
 | LAN client | NexusGate LuCI/SSH | direct on br-lan to 192.168.100.1 | local |
@@ -114,7 +115,7 @@ LAN client :53 -> dnsmasq (router :53) -> AdGuard Home (127.0.0.1:5354)
 
 AdGuard filter lists bootstrapped by `scripts/configure-adguard-filters.sh` (AdGuard DNS filter, AdAway, Tracking Protection, Popup Hosts).
 
-Upstream resolvers are ISP plain DNS only (no Cloudflare/Google/Quad9 DoH). Apply via `scripts/configure-isp-dns.sh`; each resolver is policy-routed out its own WAN (Vivo → table 6, Claro → table 10).
+Upstream resolvers are ISP plain DNS only (no Cloudflare/Google/Quad9 DoH). Apply via `scripts/configure-isp-dns.sh`; each resolver is policy-routed out its own WAN (WAN1 resolvers → table 6, WAN2 resolvers → table 10).
 
 ## Expected behavior
 

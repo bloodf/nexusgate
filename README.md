@@ -7,11 +7,21 @@ is assigned one WAN and keeps one stable public IP. Both links carry traffic in
 parallel across devices (offload), and streaming/gaming stay stable because a
 device's flows never split across two public IPs.
 
+## Reference deployment
+
+This project was built and tested on a Brazilian dual-ISP setup:
+WAN1 (primary) = Vivo Fibra (PPPoE, generic credentials `cliente@cliente` / `cliente`),
+WAN2 (secondary) = Claro Coaxial (DHCP/cable).
+All ISP DNS addresses, public IPs, gateway addresses, the Tailscale node address, and
+the previous-router references throughout these docs are example values from that
+deployment. Replace them with your own region's providers, connection types,
+credentials, and addresses.
+
 ## Default behavior
 
 - Each device egresses **one WAN, one stable public IP** (no mid-session flip).
-- **Vivo (wan1) is the default WAN**; a MAC lock list routes chosen devices
-  (mostly streaming) over **Claro (wan2)**.
+- **WAN1 (primary) is the default WAN**; a MAC lock list routes chosen devices
+  (mostly streaming) over **WAN2 (secondary/fallback)**.
 - Both WANs active simultaneously across devices; a single device is capped at one
   link (~1Gb) — 2Gb single-flow needs MPTCP+VPS bonding (out of scope).
 - Automatic failover + shift-back per WAN (post-tracking hook `098-wan-affinity`).
@@ -26,13 +36,13 @@ device's flows never split across two public IPs.
 | Port | Role | Use |
 |---|---|---|
 | `eth0` | LAN / management | Admin PC; bridged with eth3 in br-lan |
-| `eth1` | WAN1 Fiber (PPPoE) | TP-Link GPON ONT, Vivo Fibra |
-| `eth2` | WAN2 Coax (DHCP) | Cable modem in router mode (double-NAT v1) |
+| `eth1` | WAN1 (primary, e.g. PPPoE/fiber) | GPON ONT or fiber modem |
+| `eth2` | WAN2 (secondary, e.g. DHCP/cable) | Cable modem in router mode (double-NAT v1) |
 | `eth3` | LAN downlink | Home Wi-Fi router WAN port; bridged with eth0 |
 
 `eth0` and `eth3` are bridged into `br-lan`. NexusGate runs DHCP on LAN; home Wi-Fi router plugs into `eth3` and receives internet.
 
-Vivo Fibra PPPoE credentials: `cliente@cliente` / `cliente` (generic; auth done at OLT by ONT serial).
+WAN1 PPPoE credentials: `<pppoe-username>` / `<pppoe-password>` (set by your ISP; see [Reference deployment](#reference-deployment) for the example values used during initial testing).
 
 No wwan0 / 4G in v1 deployment.
 
@@ -83,7 +93,7 @@ Installed UI modules:
 - OMR bypass UI when available
 - `adguardhome` DNS filtering, with dnsmasq kept as LAN DHCP/DNS frontend
 
-mwan3 unavailable on OMR (requires `iptables-mod-conntrack-extra`, missing on nftables-only system). Routing is per-device WAN affinity: an nft prerouting chain (`/etc/nftables.d/20-wan-affinity.nft`) marks each device by MAC, fwmark `ip rule`s send marked devices to single-nexthop tables 100 (Vivo) / 101 (Claro), and post-tracking hook `/usr/share/omr/post-tracking.d/098-wan-affinity` handles failover. Applied by `scripts/configure-wan-affinity.sh`. (OMR core still maintains ECMP table 991337 but it is shadowed by the affinity rules.)
+mwan3 unavailable on OMR (requires `iptables-mod-conntrack-extra`, missing on nftables-only system). Routing is per-device WAN affinity: an nft prerouting chain (`/etc/nftables.d/20-wan-affinity.nft`) marks each device by MAC, fwmark `ip rule`s send marked devices to single-nexthop tables 100 (WAN1) / 101 (WAN2), and post-tracking hook `/usr/share/omr/post-tracking.d/098-wan-affinity` handles failover. Applied by `scripts/configure-wan-affinity.sh`. (OMR core still maintains ECMP table 991337 but it is shadowed by the affinity rules.)
 
 ## Important limit
 
@@ -94,8 +104,8 @@ A single device is capped at one WAN link (~1Gb). Splitting one flow across two 
 1. Follow `prompts/00-bootstrap.md` through `prompts/13-verification.md`.
 2. Install LuCI addons via `scripts/install-luci-addons.sh`.
 3. Configure LAN bridge (eth0+eth3) via `scripts/configure-lan-eth3.sh`.
-4. Configure Fiber WAN PPPoE via `scripts/configure-wan-pppoe.sh` (Vivo Fibra) and Coax DHCP wan2.
-5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (retires the old `ecmp-balance.sh` load balancer; set `CLARO_MACS`/`VIVO_MACS` to your lock lists).
+4. Configure WAN1 PPPoE via `scripts/configure-wan-pppoe.sh` and WAN2 DHCP.
+5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (retires the old `ecmp-balance.sh` load balancer; set `WAN2_MACS`/`WAN1_MACS` to your lock lists).
 6. Configure SQM via `scripts/configure-sqm.sh`.
 7. Bootstrap AdGuard filter lists via `scripts/configure-adguard-filters.sh`.
 8. Point DNS at ISP resolvers via `scripts/configure-isp-dns.sh` and fix tracker ICMP false-down via `scripts/configure-omr-tracker.sh`.
