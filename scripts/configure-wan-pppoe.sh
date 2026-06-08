@@ -45,9 +45,34 @@ uci set network.wan1.username="$PPP_USER"
 uci set network.wan1.password="$PPP_PASS"
 uci set network.wan1.ipv6='0'
 uci set network.wan1.defaultroute='0'
-uci set network.wan1.multipath='on'
+# No VPS bonding -> MPTCP is pointless here. multipath='master'/'on' makes OMR
+# thrash the PPPoE master (logread: "Set pppoe-wan1 to master ... deactivated ...
+# off" looping), which contributed to the Vivo link flapping. Per-device affinity
+# routes via single-nexthop tables (098-wan-affinity), not MPTCP, so turn it off.
+uci set network.wan1.multipath='off'
+# LCP echo keepalive: 4 missed echoes at 3s interval (~12s) declares the peer
+# dead and tears the session down cleanly so omr-tracker/098 fail traffic over
+# fast, instead of a half-open ppp lingering and black-holing packets.
+uci set network.wan1.keepalive='4 3'
 uci set network.wan1.metric="$METRIC"
 uci commit network
+
+# MSS clamp on the PPPoE egress. The stock fw4 mtu_fix rule clamps on the
+# zone's ethernet devices (eth1/eth2), but Vivo egresses over pppoe-wan1
+# (MTU ~1492). Without clamping the ppp device, full-size TCP segments black-hole
+# (DNS/ICMP work, page loads stall) -- the classic PPPoE MSS symptom. Clamp both
+# directions on any pppoe-* device, MSS = path MTU. fw4 includes this file into
+# table inet fw4, so a forward-hook chain is valid here.
+mkdir -p /etc/nftables.d
+cat > /etc/nftables.d/21-pppoe-mss.nft <<'NFT'
+# Managed by nexusgate configure-wan-pppoe.sh -- do not edit by hand.
+chain pppoe_mss {
+    type filter hook forward priority mangle; policy accept;
+    oifname "pppoe-*" tcp flags syn tcp option maxseg size set rt mtu counter
+    iifname "pppoe-*" tcp flags syn tcp option maxseg size set rt mtu counter
+}
+NFT
+fw4 reload >/dev/null 2>&1 || true
 
 /etc/init.d/network reload
 ifup wan1

@@ -30,17 +30,31 @@
 
 set -eu
 
-_up() { [ "$(uci -q get "openmptcprouter.$1.state" 2>/dev/null)" = "up" ]; }
+# Egress-verified liveness. The old check trusted openmptcprouter.<wan>.state,
+# which goes stale: a Vivo PPPoE flap could leave wan1.state="down" while the
+# link was actually fine, and this script would then dump the whole LAN onto the
+# double-NAT Claro. Probe the WAN's actual egress instead -- ping bound to the
+# WAN device (SO_BINDTODEVICE) sends out that exact link regardless of routing
+# tables, so success/failure reflects real reachability, not cached state.
+# Two targets so a single dead resolver doesn't false-negative a live WAN.
+_reach() {
+	ping -W1 -c1 -I "$1" 1.1.1.1 >/dev/null 2>&1 && return 0
+	ping -W1 -c1 -I "$1" 8.8.8.8 >/dev/null 2>&1
+}
 
 GW1=$(ip route show table 6  2>/dev/null | awk '/^default/{print $3;exit}')
 DEV1=$(ip route show table 6  2>/dev/null | awk '/^default/{print $5;exit}')
 GW2=$(ip route show table 10 2>/dev/null | awk '/^default/{print $3;exit}')
 DEV2=$(ip route show table 10 2>/dev/null | awk '/^default/{print $5;exit}')
 
+# A WAN is usable only if its table has a nexthop AND its egress actually reaches
+# the internet. Probe result is authoritative -- it overrides stale uci state in
+# both directions (stale-down working WAN stays in service; stale-up dead WAN is
+# excluded so traffic is never dumped onto a black hole).
 WAN1_OK=0
 WAN2_OK=0
-[ -n "${GW1:-}" ] && [ -n "${DEV1:-}" ] && _up wan1 && WAN1_OK=1
-[ -n "${GW2:-}" ] && [ -n "${DEV2:-}" ] && _up wan2 && WAN2_OK=1
+[ -n "${GW1:-}" ] && [ -n "${DEV1:-}" ] && _reach "$DEV1" && WAN1_OK=1
+[ -n "${GW2:-}" ] && [ -n "${DEV2:-}" ] && _reach "$DEV2" && WAN2_OK=1
 
 # table 100 = Vivo primary, Claro failover
 if [ "$WAN1_OK" = 1 ]; then
