@@ -37,7 +37,7 @@ credentials, and addresses.
 |---|---|---|
 | `eth0` | LAN / management | Admin PC; bridged with eth3 in br-lan |
 | `eth1` | WAN1 (primary, e.g. PPPoE/fiber) | GPON ONT or fiber modem |
-| `eth2` | WAN2 (secondary, e.g. DHCP/cable) | Cable modem in router mode (double-NAT v1) |
+| `eth2` | WAN2 (secondary, e.g. DHCP/cable) | Cable modem in bridge mode (carrier address direct to eth2, possibly CGNAT) or router mode (double-NAT); reference deployment uses bridge |
 | `eth3` | LAN downlink | Home Wi-Fi router WAN port; bridged with eth0 |
 
 `eth0` and `eth3` are bridged into `br-lan`. NexusGate runs DHCP on LAN; home Wi-Fi router plugs into `eth3` and receives internet.

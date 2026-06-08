@@ -12,7 +12,7 @@ Single TCP/UDP flow cannot be split across two WANs without bonding/MPTCP. Per-o
 
 - `eth0` → LAN / management; bridged with eth3 in `br-lan`
 - `eth1` → WAN1 (primary, e.g. PPPoE/fiber) via GPON ONT or fiber modem
-- `eth2` → WAN2 (secondary, e.g. DHCP/cable) via cable modem in router mode, double-NAT v1
+- `eth2` → WAN2 (secondary, e.g. DHCP/cable) via cable modem in bridge mode (carrier address direct, possibly CGNAT) or router mode (double-NAT); reference deployment uses bridge
 - `eth3` → LAN downlink to home Wi-Fi router; bridged with eth0
 - No wwan0 / 4G in v1
 
@@ -50,8 +50,8 @@ Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate
         (e.g. PPPoE/fiber) (e.g. DHCP/cable)
             |                 |
        GPON ONT /        Cable/DSL Modem
-       Fiber Modem        (router mode,
-       (bridge)            double-NAT v1)
+       Fiber Modem        (bridge mode:
+       (bridge)            carrier addr/CGNAT)
             |                 |
     pppoe-wan1 / eth1     eth2 / wan2
             \                 /

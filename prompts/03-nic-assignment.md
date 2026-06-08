@@ -7,7 +7,7 @@ Map physical ports to NexusGate roles.
 
 - eth0 → LAN / management (admin PC); bridged with eth3 in `br-lan`
 - eth1 → WAN1 (primary, e.g. PPPoE/fiber) — GPON ONT or fiber modem
-- eth2 → WAN2 (secondary, e.g. DHCP/cable) — cable modem in router mode (double-NAT, modem can't bridge)
+- eth2 → WAN2 (secondary, e.g. DHCP/cable) — cable modem in bridge mode (carrier address direct, possibly CGNAT) or router mode (double-NAT)
 - eth3 → LAN downlink to 1Gb unmanaged switch; bridged with eth0
 - No wwan0 / 4G in v1
 
