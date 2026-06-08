@@ -57,15 +57,16 @@ echo "AdGuard backup: $BAK"
 sleep 3
 
 # Policy-route ISP resolvers out matching WAN tables.
+# One UNIQUE priority per upstream IP. iproute drops a rule added at an
+# already-used priority, so the old same-priority loop form silently kept only
+# one IP per WAN - the dropped resolver then leaked out the default WAN and
+# timed out (Claro 181.213.132.2 over Vivo -> i/o timeout). Keep 4 distinct.
 _isp_dns_policy() {
-	for ip in "$WAN1_DNS1" "$WAN1_DNS2"; do
-		ip rule show | grep -q "to ${ip} lookup 6" \
-			|| ip rule add priority 90 to "$ip" lookup 6
-	done
-	for ip in "$WAN2_DNS1" "$WAN2_DNS2"; do
-		ip rule show | grep -q "to ${ip} lookup 10" \
-			|| ip rule add priority 91 to "$ip" lookup 10
-	done
+	_add() { ip rule show | grep -q "to $1 lookup $2" || ip rule add priority "$3" to "$1" lookup "$2"; }
+	_add "$WAN1_DNS1" 6  89
+	_add "$WAN1_DNS2" 6  90
+	_add "$WAN2_DNS1" 10 91
+	_add "$WAN2_DNS2" 10 92
 }
 
 _isp_dns_policy
@@ -75,8 +76,10 @@ RC=/etc/rc.local
 MARK="# nexusgate-isp-dns-policy"
 if ! grep -q "$MARK" "$RC" 2>/dev/null; then
 	sed -i "/^exit 0/i $MARK" "$RC"
-	sed -i "/^exit 0/i for ip in $WAN1_DNS1 $WAN1_DNS2; do ip rule add priority 90 to \\\$ip lookup 6 2>/dev/null; done" "$RC"
-	sed -i "/^exit 0/i for ip in $WAN2_DNS1 $WAN2_DNS2; do ip rule add priority 91 to \\\$ip lookup 10 2>/dev/null; done" "$RC"
+	sed -i "/^exit 0/i ip rule add priority 89 to $WAN1_DNS1 lookup 6 2>/dev/null" "$RC"
+	sed -i "/^exit 0/i ip rule add priority 90 to $WAN1_DNS2 lookup 6 2>/dev/null" "$RC"
+	sed -i "/^exit 0/i ip rule add priority 91 to $WAN2_DNS1 lookup 10 2>/dev/null" "$RC"
+	sed -i "/^exit 0/i ip rule add priority 92 to $WAN2_DNS2 lookup 10 2>/dev/null" "$RC"
 fi
 
 echo
