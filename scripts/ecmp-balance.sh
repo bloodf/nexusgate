@@ -15,18 +15,29 @@
 
 set -eu
 
+_omr_wan_up() {
+	[ "$(uci -q get "openmptcprouter.${1}.state" 2>/dev/null)" = "up" ]
+}
+
 GW1=$(ip route show table 6  2>/dev/null | awk '/^default/ {print $3; exit}')
 DEV1=$(ip route show table 6  2>/dev/null | awk '/^default/ {print $5; exit}')
 GW2=$(ip route show table 10 2>/dev/null | awk '/^default/ {print $3; exit}')
 DEV2=$(ip route show table 10 2>/dev/null | awk '/^default/ {print $5; exit}')
 
-if [ -n "${GW1:-}" ] && [ -n "${GW2:-}" ]; then
+# Only balance WANs OMR tracker marks UP. A link-up / DHCP lease is not enough:
+# when tracker marks DOWN, OMR poisons the per-WAN down table and traffic dies.
+WAN1_OK=0
+WAN2_OK=0
+[ -n "${GW1:-}" ] && [ -n "${DEV1:-}" ] && _omr_wan_up wan1 && WAN1_OK=1
+[ -n "${GW2:-}" ] && [ -n "${DEV2:-}" ] && _omr_wan_up wan2 && WAN2_OK=1
+
+if [ "$WAN1_OK" = 1 ] && [ "$WAN2_OK" = 1 ]; then
 	ip route replace default scope global table 991337 \
 		nexthop via "$GW1" dev "$DEV1" weight 1 \
 		nexthop via "$GW2" dev "$DEV2" weight 1
-elif [ -n "${GW1:-}" ]; then
+elif [ "$WAN1_OK" = 1 ]; then
 	ip route replace default scope global table 991337 via "$GW1" dev "$DEV1"
-elif [ -n "${GW2:-}" ]; then
+elif [ "$WAN2_OK" = 1 ]; then
 	ip route replace default scope global table 991337 via "$GW2" dev "$DEV2"
 fi
 

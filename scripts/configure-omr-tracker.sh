@@ -1,0 +1,57 @@
+#!/bin/sh
+# OMR tracker health checks tuned for Brazilian ISPs.
+#
+# Problem: default omr-tracker uses ICMP ping to 1.1.1.1 / 8.8.8.8. Claro (and
+# some other ISPs) block ICMP to the public internet. Tracker marks wan2 DOWN,
+# OMR installs broken "down" routes (table 14 with Vivo gateway on eth2), and
+# ~50% of ECMP flows die even though HTTP/TCP through Claro works fine.
+#
+# Fix:
+#   wan1 (Vivo): DNS check against Vivo resolvers (from PPPoE/DHCP lease).
+#   wan2 (Claro): type=none — link/DHCP up is enough; ICMP is blocked upstream.
+#     Optional: set WAN2_TRACKER_TYPE=httping and WAN2_HTTP_HOST for HTTP probe.
+#
+# Re-run after omr-tracker package upgrades (may reset /etc/config/omr-tracker).
+
+set -eu
+
+WAN1_DNS1=${WAN1_DNS1:-187.50.250.115}
+WAN1_DNS2=${WAN1_DNS2:-187.50.250.215}
+WAN2_TRACKER_TYPE=${WAN2_TRACKER_TYPE:-none}
+WAN2_DNS1=${WAN2_DNS1:-181.213.132.2}
+WAN2_DNS2=${WAN2_DNS2:-181.213.132.3}
+
+# Auto-read ISP DNS from live leases when available.
+if command -v jsonfilter >/dev/null 2>&1; then
+	_live1=$(ifstatus wan1 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_live2=$(ifstatus wan1 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	[ -n "$_live1" ] && WAN1_DNS1="$_live1"
+	[ -n "$_live2" ] && WAN1_DNS2="$_live2"
+	_live3=$(ifstatus wan2 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_live4=$(ifstatus wan2 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	[ -n "$_live3" ] && WAN2_DNS1="$_live3"
+	[ -n "$_live4" ] && WAN2_DNS2="$_live4"
+fi
+
+uci -q set omr-tracker.wan1=interface
+uci -q set omr-tracker.wan1.enabled='1'
+uci -q set omr-tracker.wan1.type='dns'
+uci -q delete omr-tracker.wan1.hosts 2>/dev/null || true
+uci add_list omr-tracker.wan1.hosts="$WAN1_DNS1"
+uci add_list omr-tracker.wan1.hosts="$WAN1_DNS2"
+
+uci -q set omr-tracker.wan2=interface
+uci -q set omr-tracker.wan2.enabled='1'
+uci -q set omr-tracker.wan2.type="$WAN2_TRACKER_TYPE"
+if [ "$WAN2_TRACKER_TYPE" = "dns" ]; then
+	uci -q delete omr-tracker.wan2.hosts 2>/dev/null || true
+	uci add_list omr-tracker.wan2.hosts="$WAN2_DNS1"
+	uci add_list omr-tracker.wan2.hosts="$WAN2_DNS2"
+fi
+
+uci commit omr-tracker
+/etc/init.d/omr-tracker restart
+sleep 12
+
+echo "wan1 tracker: type=dns hosts=$WAN1_DNS1 $WAN1_DNS2 state=$(uci -q get openmptcprouter.wan1.state)"
+echo "wan2 tracker: type=$WAN2_TRACKER_TYPE state=$(uci -q get openmptcprouter.wan2.state)"
