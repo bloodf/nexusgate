@@ -110,6 +110,16 @@ for f in "$PT_DIR"/099-ecmp-balance.bak-*; do
 	[ -f "$f" ] && rm -f "$f"
 done
 
+# ---- 3b. Enable conntrack byte accounting -----------------------------------
+# Per-device live up/down rates in the web UI read byte counters from
+# /proc/net/nf_conntrack. Those counters are zero unless nf_conntrack_acct is on.
+# Persist it so accounting survives reboot, then apply live (best-effort).
+ACCT_CONF=/etc/sysctl.d/30-wan-affinity-conntrack-acct.conf
+if [ ! -f "$ACCT_CONF" ] || ! grep -q '^net.netfilter.nf_conntrack_acct=1' "$ACCT_CONF" 2>/dev/null; then
+	echo 'net.netfilter.nf_conntrack_acct=1' > "$ACCT_CONF"
+fi
+sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null 2>&1 || true
+
 # ---- 4. Apply ---------------------------------------------------------------
 if [ -x "$APPLY" ]; then
 	"$APPLY"

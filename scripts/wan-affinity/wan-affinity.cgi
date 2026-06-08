@@ -68,16 +68,13 @@ norm_mac() {
 }
 
 # JSON-escape an arbitrary string: escape backslash, double-quote, tab, CR, LF.
-# Using sed with literal control chars embedded via printf for busybox compat
-# (no GNU sed -z, no multi-line sed). Names are sanitized before storage but
-# we harden the encoder here so the JSON envelope is always structurally safe.
+# awk (not sed) because busybox/POSIX sed holds inter-line LF outside the pattern
+# space, so s/\n// rules are dead code and raw newlines leak into the JSON. awk
+# iterates records and re-emits the LF as an escaped \n via the NR>1 join, so the
+# full buffer - including embedded newlines from apply-error output - is encoded
+# structurally safe. Names are sanitized before storage; this hardens the envelope.
 jsonesc() {
-	printf '%s' "$1" | sed \
-		-e 's/\\/\\\\/g' \
-		-e 's/"/\\"/g' \
-		-e 's/	/\\t/g' \
-		-e "s/$(printf '\r')/\\\\r/g" \
-		-e "s/$(printf '\n')/\\\\n/g"
+	printf '%s' "$1" | awk 'BEGIN{ORS=""} {gsub(/\\/,"\\\\");gsub(/"/,"\\\"");gsub(/\t/,"\\t");gsub(/\r/,"\\r"); if(NR>1) printf "\\n"; printf "%s",$0}'
 }
 
 in_list() { # mac listfile
@@ -108,7 +105,11 @@ wan2_label=$(uci -q get network.wan2.label 2>/dev/null || true)
 if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 	printf 'Content-Type: application/json\r\n\r\n'
 
+	# Guard non-numeric CONTENT_LENGTH and clamp to a sane cap. Unbounded dd would
+	# buffer the whole body in RAM on a memory-constrained router (DoS vector).
 	len=${CONTENT_LENGTH:-0}
+	case "$len" in ''|*[!0-9]*) len=0 ;; esac
+	[ "$len" -gt 65536 ] && len=65536
 	body=$(dd bs=1 count="$len" 2>/dev/null)
 
 	# Extract fields from urlencoded body (single pass, no eval)
@@ -116,6 +117,9 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 	post_action=""
 	post_mac=""
 	post_name=""
+	# set -f disables glob expansion: a bare `*` token in the body would otherwise
+	# expand to filenames during the unquoted `for kv in $body` split.
+	set -f
 	OLD_IFS=$IFS
 	IFS='&'
 	for kv in $body; do
@@ -131,6 +135,7 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 		esac
 	done
 	IFS=$OLD_IFS
+	set +f
 
 	# ---- action=rename: update device friendly name ----------------------------
 	if [ "$post_action" = "rename" ]; then
@@ -152,8 +157,11 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 
 		# Atomically rewrite names.list: write all lines except the existing entry
 		# for this mac, then append the new one (skip if empty = delete custom name).
+		# Temp MUST live in the same filesystem as the target so the final mv is a
+		# rename (atomic), not a cross-fs copy+unlink. /tmp is tmpfs and /etc is an
+		# overlay, so mktemp /tmp/... would make mv non-atomic and risk truncation.
 		touch "$NAMES_LIST" 2>/dev/null || true
-		tmp=$(mktemp /tmp/names_wa.XXXXXX)
+		tmp=$(mktemp "$WA_DIR/.names.XXXXXX")
 		awk -F'|' -v m="$cm" '$1!=m{print}' "$NAMES_LIST" > "$tmp" 2>/dev/null || true
 		if [ -n "$safe_name" ]; then
 			printf '%s|%s\n' "$cm" "$safe_name" >> "$tmp"
