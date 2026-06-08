@@ -1,0 +1,78 @@
+#!/bin/sh
+# /usr/share/omr/post-tracking.d/098-wan-affinity
+#
+# Per-device WAN affinity with automatic failover. Replaces 098-vivo-pin and
+# the 099-ecmp-balance load-balancer.
+#
+# Model:
+#   - Vivo (wan1) is the default WAN for every LAN device.
+#   - Devices whose MAC is in the Claro lock list are marked 0x20000 by
+#     /etc/nftables.d/20-wan-affinity.nft and routed via Claro (wan2).
+#   - Devices in the Vivo lock list are marked 0x10000 (explicit; same as default).
+#
+# Routing:
+#   mark 0x10000 -> ip rule prio 40 -> table 100 (Vivo primary, Claro failover)
+#   mark 0x20000 -> ip rule prio 41 -> table 101 (Claro primary, Vivo failover)
+#   unmarked LAN -> ip rule prio 45 iif br-lan -> table 100 (Vivo default),
+#                   placed before OMR core's pri-50 ECMP rule (table 991337).
+#
+# Why this design:
+#   - Each table holds a SINGLE nexthop. No ECMP, no L4 hash, so a device's
+#     flows never split across two public IPs mid-session. This is what keeps
+#     streaming/gaming stable (the old ECMP path egressed one device from both
+#     Vivo and Claro at once and broke TLS resume / QUIC migration / anti-fraud).
+#   - Failover is just rewriting the single nexthop of each table from live WAN
+#     state. Marks never change, so when the WAN returns the device shifts back.
+#   - Runs every omr-tracker tick. Idempotent.
+#
+# Gateways are sourced from each WAN's own table (6 = wan1, 10 = wan2), which OMR
+# always populates even though defaultroute=0 leaves the ubus route arrays empty.
+
+set -eu
+
+_up() { [ "$(uci -q get "openmptcprouter.$1.state" 2>/dev/null)" = "up" ]; }
+
+GW1=$(ip route show table 6  2>/dev/null | awk '/^default/{print $3;exit}')
+DEV1=$(ip route show table 6  2>/dev/null | awk '/^default/{print $5;exit}')
+GW2=$(ip route show table 10 2>/dev/null | awk '/^default/{print $3;exit}')
+DEV2=$(ip route show table 10 2>/dev/null | awk '/^default/{print $5;exit}')
+
+WAN1_OK=0
+WAN2_OK=0
+[ -n "${GW1:-}" ] && [ -n "${DEV1:-}" ] && _up wan1 && WAN1_OK=1
+[ -n "${GW2:-}" ] && [ -n "${DEV2:-}" ] && _up wan2 && WAN2_OK=1
+
+# table 100 = Vivo primary, Claro failover
+if [ "$WAN1_OK" = 1 ]; then
+	ip route replace default scope global table 100 via "$GW1" dev "$DEV1"
+elif [ "$WAN2_OK" = 1 ]; then
+	ip route replace default scope global table 100 via "$GW2" dev "$DEV2"
+fi
+
+# table 101 = Claro primary, Vivo failover
+if [ "$WAN2_OK" = 1 ]; then
+	ip route replace default scope global table 101 via "$GW2" dev "$DEV2"
+elif [ "$WAN1_OK" = 1 ]; then
+	ip route replace default scope global table 101 via "$GW1" dev "$DEV1"
+fi
+
+# Policy rules (idempotent).
+ip rule show | grep -q "fwmark 0x10000/0x10000 lookup 100" \
+	|| ip rule add priority 40 fwmark 0x10000/0x10000 lookup 100
+ip rule show | grep -q "fwmark 0x20000/0x20000 lookup 101" \
+	|| ip rule add priority 41 fwmark 0x20000/0x20000 lookup 101
+# LAN default at priority 45: strictly BEFORE OMR core's pri-50
+# "iif br-lan lookup 991337" ECMP rule (rebuilt every tick by
+# common-post-tracking.sh / 003-up, which runs before this script). Because 45 <
+# 50, unmarked LAN traffic resolves table 100 (Vivo) first and OMR's 991337 rule
+# is permanently shadowed -- no per-tick deletion race, survives OMR upgrades.
+ip rule show | grep -qE "^45:[[:space:]].*iif br-lan lookup 100" \
+	|| ip rule add priority 45 iif br-lan lookup 100
+
+# Drop the pri-50 br-lan->100 rule an earlier version of this script added
+# (superseded by the pri-45 rule above). Bounded loop, no early break.
+_i=0
+while ip rule show | grep -qE "^50:[[:space:]].*iif br-lan lookup 100" && [ "$_i" -lt 16 ]; do
+	ip rule del priority 50 iif br-lan lookup 100 2>/dev/null
+	_i=$((_i + 1))
+done

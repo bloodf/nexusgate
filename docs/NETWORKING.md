@@ -1,6 +1,8 @@
 # Networking
 
-NexusGate balances by operation/flow, not by machine.
+NexusGate assigns each device to one WAN (per-device affinity), giving every
+device a single stable public IP. It no longer balances per-flow — see
+[Default policy: per-device WAN affinity](#default-policy-per-device-wan-affinity).
 
 ## LAN topology (eth3 → unmanaged switch)
 
@@ -12,7 +14,7 @@ NexusGate balances by operation/flow, not by machine.
 | 2 | CortexOS local VPS | Reserved `192.168.100.10` (MAC `40:9c:a7:49:4b:62`) |
 | 3 | WD NAS | Dynamic; firmware-configured static `.187` left in place |
 
-Deco mesh (5x BE65) is in **Access Point mode**: all 5 Decos pull DHCP from NexusGate, all Wi-Fi clients land directly on `192.168.100.0/24`, AdGuard sees every query, ECMP balances every flow. Reservations intentionally not used for Decos.
+Deco mesh (5x BE65) is in **Access Point mode**: all 5 Decos pull DHCP from NexusGate, all Wi-Fi clients land directly on `192.168.100.0/24`, AdGuard sees every query, and per-device WAN affinity (by client MAC) decides each device's egress WAN. Reservations intentionally not used for Decos.
 
 DHCP pool = `192.168.100.50-249`. Static infra range `2-49` reserved.
 DNS push (DHCP option 6) = `192.168.100.1` so every client uses the dnsmasq → AdGuard chain.
@@ -32,25 +34,49 @@ Apply via `scripts/configure-sqm.sh` (override per env vars). CAKE shapes ingres
 
 Removed Tailscale leaves clients with `100.100.100.100` in their static DNS config — those packets get routed to the public Internet and dropped. `scripts/configure-dns-intercept.sh` installs an `fw4` DNAT rule that rewrites `100.100.100.100:53` (UDP+TCP) → `192.168.100.1:53` (dnsmasq → AdGuard), so clients keep working without reconfiguration.
 
-## Default policy: kernel ECMP
+## Default policy: per-device WAN affinity
 
-- Kernel multipath in OMR table `991337` with two equal-cost nexthops (wan1, wan2).
-- Per-WAN defaults sourced from tables 6 (wan1) and 10 (wan2) by post-tracking hook `099-ecmp-balance`.
-- LAN traffic forced into 991337 via `ip rule ... iif br-lan lookup 991337`.
-- Requires `net.ipv4.fib_multipath_hash_policy=1` (L4 hash incl. src+dst port). Default L3-only hash would pin one LAN client → one server to a single WAN.
-- 4G/wan3 backup: out of scope v1.
-- Sticky exceptions: roadmap (OMR bypass / fwmark rules).
+Each device egresses one WAN and keeps one stable public IP. This replaced the
+old per-flow ECMP balancer, which L4-hashed a single device's connections across
+both public IPs at once and broke streaming/gaming (TLS resume failures, QUIC
+migration rejected, anti-fraud resets). Apply via `scripts/configure-wan-affinity.sh`.
 
-One PC can use both links when it opens multiple connections (different src/dst ports → different ECMP buckets).
+**Model**
 
-## Sticky exceptions (roadmap, not v1)
+- **Vivo (wan1) is the default WAN** for every LAN device.
+- Devices whose MAC is in the **Claro lock list** egress Claro (wan2) — mostly
+  streaming boxes (Claro's ~950M down suits streaming; weak up is irrelevant for
+  download). Devices in the **Vivo lock list** are explicitly pinned to Vivo.
+- Both WANs carry traffic simultaneously across devices (offload, not single-flow
+  aggregation). A single device is capped at one link (~1Gb); 2Gb single-flow is
+  impossible without MPTCP+VPS bonding, which is out of scope.
 
-Will be applied via OMR bypass or fwmark rules for:
+**Marks, rules, tables**
 
-- Gaming UDP
-- VoIP/SIP/RTP
-- Video calls if needed
-- Banking/login-sensitive domains
+| Selector | Mark | `ip rule` | Table | Primary nexthop | Failover |
+|---|---|---|---|---|---|
+| Claro-locked MAC | `0x20000` | pri 41 | 101 | Claro (`eth2`) | Vivo (`pppoe-wan1`) |
+| Vivo-locked MAC | `0x10000` | pri 40 | 100 | Vivo (`pppoe-wan1`) | Claro (`eth2`) |
+| unmarked LAN | — | pri 45 `iif br-lan` | 100 | Vivo (default) | Claro |
+
+- Marking is an nft prerouting chain (`/etc/nftables.d/20-wan-affinity.nft`,
+  priority -150) keyed on `ether saddr`. No `jhash`, no port folding.
+- Each table holds a **single nexthop**, so a device's flows never split across
+  two public IPs mid-session — this is what keeps streaming/gaming stable.
+- **Failover + shift-back** lives in post-tracking hook `098-wan-affinity`: each
+  omr-tracker tick it rewrites the single nexthop of tables 100/101 from live WAN
+  state (`openmptcprouter.wanN.state`). Marks never change, so a device returns to
+  its home WAN automatically when that WAN recovers (one brief reset per switch).
+- OMR core still rebuilds its ECMP table `991337` and a `pri 50 iif br-lan lookup
+  991337` rule every tick. The affinity LAN-default rule sits at **pri 45**
+  (before 50), permanently shadowing it — no per-tick deletion race, survives OMR
+  package upgrades. `fib_multipath_hash_policy` is left as-is but unused.
+- NAT: the fw4 wan-zone masquerade SNATs per egress device, so both tables get
+  correct source NAT with no extra config.
+- 4G/wan3 backup: out of scope.
+
+To change a device's WAN, edit the lock lists and re-apply (see
+[TROUBLESHOOTING](TROUBLESHOOTING.md)), or use the device-management WebUI.
 
 ## Interface map
 
@@ -68,7 +94,8 @@ Will be applied via OMR bypass or fwmark rules for:
 
 | Source | Destination | Path | Table |
 |---|---|---|---|
-| LAN client | Internet | br-lan -> ip rule iif br-lan -> ECMP (per-flow nexthop) -> pppoe-wan1 or eth2 | 991337 |
+| LAN client (default) | Internet | br-lan -> ip rule pri 45 iif br-lan -> single nexthop -> pppoe-wan1 (Vivo) | 100 |
+| LAN client (Claro-locked) | Internet | br-lan -> nft mark 0x20000 -> ip rule pri 41 -> single nexthop -> eth2 (Claro) | 101 |
 | Router itself | Internet | main default (lowest metric) | main |
 | LAN client | LAN client | br-lan switching, no IP routing | n/a |
 | LAN client | NexusGate LuCI/SSH | direct on br-lan to 192.168.100.1 | local |
@@ -87,12 +114,14 @@ LAN client :53 -> dnsmasq (router :53) -> AdGuard Home (127.0.0.1:5354)
 
 AdGuard filter lists bootstrapped by `scripts/configure-adguard-filters.sh` (AdGuard DNS filter, AdAway, Tracking Protection, Popup Hosts).
 
+Upstream resolvers are ISP plain DNS only (no Cloudflare/Google/Quad9 DoH). Apply via `scripts/configure-isp-dns.sh`; each resolver is policy-routed out its own WAN (Vivo → table 6, Claro → table 10).
+
 ## Expected behavior
 
 | Workload | Result |
 |---|---|
-| One TCP flow | one WAN max (one ECMP bucket) |
-| Multi-stream speedtest | WAN1+WAN2 aggregate (multiple buckets) |
-| Steam/browser/package downloads | often WAN1+WAN2 aggregate |
-| Gaming/VoIP (v1) | balanced like any flow; sticky roadmap |
-| WAN failure | post-tracking hook rebuilds 991337 with surviving nexthop |
+| Any flow from one device | one WAN, one stable public IP (no mid-session flip) |
+| Single-device speedtest | capped at that device's WAN (~1Gb), not aggregate |
+| Two devices on different WANs | both links carry traffic in parallel (offload) |
+| Streaming/gaming | stable — single egress IP, no TLS-resume/QUIC breakage |
+| WAN failure | `098-wan-affinity` repoints affected table to surviving WAN next tick; devices shift back on recovery |

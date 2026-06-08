@@ -1,16 +1,25 @@
 # NexusGate
 
-Open-source operation-aware multi-WAN SD-WAN router for Intel i3 mini-PCs running OpenMPTCProuter/OpenWrt.
+Open-source multi-WAN router for Intel i3 mini-PCs running OpenMPTCProuter/OpenWrt.
 
-Default mode uses both 1Gb WAN links by balancing **operations/flows**, not machines. One PC can use both WANs simultaneously when apps open multiple connections.
+Default mode uses both 1Gb WAN links via **per-device WAN affinity**: each device
+is assigned one WAN and keeps one stable public IP. Both links carry traffic in
+parallel across devices (offload), and streaming/gaming stay stable because a
+device's flows never split across two public IPs.
 
 ## Default behavior
 
-- Normal traffic: per-flow ECMP across WAN1/WAN2 (L4 hash).
-- Downloads/package managers/cloud sync: spread flows across both WANs.
-- One device can consume aggregate ~2Gb when workload is multi-flow.
-- Sticky exceptions (gaming/VoIP/banking) are roadmap; not active in v1 baseline.
+- Each device egresses **one WAN, one stable public IP** (no mid-session flip).
+- **Vivo (wan1) is the default WAN**; a MAC lock list routes chosen devices
+  (mostly streaming) over **Claro (wan2)**.
+- Both WANs active simultaneously across devices; a single device is capped at one
+  link (~1Gb) — 2Gb single-flow needs MPTCP+VPS bonding (out of scope).
+- Automatic failover + shift-back per WAN (post-tracking hook `098-wan-affinity`).
 - SQM/CAKE: low latency under load.
+
+> Earlier releases used per-flow ECMP (L4 hash), which split one device across two
+> public IPs and broke streaming/gaming. That model is retired
+> (`scripts/ecmp-balance.sh` kept for history only).
 
 ## Ports / physical cabling
 
@@ -74,11 +83,11 @@ Installed UI modules:
 - OMR bypass UI when available
 - `adguardhome` DNS filtering, with dnsmasq kept as LAN DHCP/DNS frontend
 
-mwan3 unavailable on OMR (requires `iptables-mod-conntrack-extra`, missing on nftables-only system). Replaced by kernel ECMP via OMR's balanced routing table 991337, populated by post-tracking hook `/usr/share/omr/post-tracking.d/099-ecmp-balance`. Requires `net.ipv4.fib_multipath_hash_policy=1` for L4 hash so single LAN client to single server actually fans out across WANs.
+mwan3 unavailable on OMR (requires `iptables-mod-conntrack-extra`, missing on nftables-only system). Routing is per-device WAN affinity: an nft prerouting chain (`/etc/nftables.d/20-wan-affinity.nft`) marks each device by MAC, fwmark `ip rule`s send marked devices to single-nexthop tables 100 (Vivo) / 101 (Claro), and post-tracking hook `/usr/share/omr/post-tracking.d/098-wan-affinity` handles failover. Applied by `scripts/configure-wan-affinity.sh`. (OMR core still maintains ECMP table 991337 but it is shadowed by the affinity rules.)
 
 ## Important limit
 
-A single TCP flow cannot be split across two WANs without MPTCP multipath. Multi-flow operations can use both WANs.
+A single device is capped at one WAN link (~1Gb). Splitting one flow across two WANs needs MPTCP+VPS bonding (out of scope). Both WANs are used in parallel across different devices.
 
 ## Quick start
 
@@ -86,14 +95,15 @@ A single TCP flow cannot be split across two WANs without MPTCP multipath. Multi
 2. Install LuCI addons via `scripts/install-luci-addons.sh`.
 3. Configure LAN bridge (eth0+eth3) via `scripts/configure-lan-eth3.sh`.
 4. Configure Fiber WAN PPPoE via `scripts/configure-wan-pppoe.sh` (Vivo Fibra) and Coax DHCP wan2.
-5. Configure ECMP load balancing via `scripts/configure-load-balancing.sh`.
+5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (retires the old `ecmp-balance.sh` load balancer; set `CLARO_MACS`/`VIVO_MACS` to your lock lists).
 6. Configure SQM via `scripts/configure-sqm.sh`.
 7. Bootstrap AdGuard filter lists via `scripts/configure-adguard-filters.sh`.
-8. (Optional) Enable remote admin via `scripts/configure-tailscale.sh` — see `prompts/14-tailscale.md`.
+8. Point DNS at ISP resolvers via `scripts/configure-isp-dns.sh` and fix tracker ICMP false-down via `scripts/configure-omr-tracker.sh`.
+9. (Optional) Enable remote admin via `scripts/configure-tailscale.sh` — see `prompts/14-tailscale.md`.
 
 ## Modes
 
-- **ECMP SD-WAN (default)**: kernel multipath in table 991337 + post-tracking hook; L4 hash.
+- **Per-device WAN affinity (default)**: nft MAC marking + single-nexthop tables 100/101 + `098-wan-affinity` failover hook. One device = one WAN = one stable public IP.
 - **Device/App Policy Routing**: optional overrides via OMR bypass / fwmark rules (roadmap).
 - **Advanced multipath**: MPTCP/OMR endpoint support for single-flow >1Gb scenarios.
 
