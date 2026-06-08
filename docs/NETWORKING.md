@@ -88,7 +88,7 @@ To change a device's WAN, edit the lock lists and re-apply (see
 | `br-lan` | bridge | 192.168.100.1/24 | LAN side, DHCP server |
 | `eth1` | physical | (pppoe parent) | WAN1 (primary) physical port |
 | `pppoe-wan1` | pppoe | public IPv4 from WAN1 ISP | WAN1 (primary) logical interface (label: "WAN1") |
-| `eth2` | physical | private DHCP from WAN2 cable/DSL modem | WAN2 (secondary) physical port (double-NAT v1, label: "WAN2") |
+| `eth2` | physical | carrier address via DHCP from WAN2 modem (may be CGNAT 100.64.0.0/10) | WAN2 (secondary) physical port (modem in bridge or router mode, label: "WAN2") |
 | `tailscale0` | wireguard | 100.x.y.z/32 | Tailnet ingress + subnet route |
 
 ## Traffic flow matrix

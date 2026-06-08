@@ -21,8 +21,10 @@ file is the pre-cutover audit result and the access-safe switch sequence.
 `br-lan = eth0 + eth3`. Both are LAN ports - switch and Wi-Fi AP may use either; the
 bridge absorbs both. eth1/eth2 are isolated WANs, never in the bridge.
 
-WAN2 stays router-mode (double-NAT) if the modem cannot bridge. Acceptable: every WAN2
-device still egresses one stable public IP (the modem WAN IP); users never see it.
+If the WAN2 modem bridges, eth2 receives the carrier address directly (may be a CGNAT
+address, not a routable public IP). If the modem cannot bridge, it stays router-mode
+(double-NAT). Either way every WAN2 device egresses one stable shared address users
+never see.
 
 ## Routing model
 
