@@ -19,7 +19,9 @@
 #
 # Files installed:
 #   /etc/wan-affinity/{claro,vivo}.list      lock lists (source of truth)
+#   /etc/wan-affinity/names.list             device friendly names (created empty)
 #   /usr/lib/wan-affinity/apply-affinity.sh  lists -> nft + routing (live)
+#   /usr/lib/wan-affinity/oui.db             offline OUI vendor lookup database
 #   /usr/share/omr/post-tracking.d/098-wan-affinity   failover hook
 #   /www/cgi-bin/wan-affinity                web UI (http://192.168.100.1/cgi-bin/wan-affinity)
 #
@@ -69,7 +71,10 @@ mkdir -p "$WA_DIR"
 [ -f "$WA_DIR/claro.list" ] || _clean_macs "$CLARO_MACS" | sort -u > "$WA_DIR/claro.list"
 [ -f "$WA_DIR/vivo.list" ]  || _clean_macs "$VIVO_MACS"  | sort -u > "$WA_DIR/vivo.list"
 
-# ---- 2. Install helper, failover hook, web UI -------------------------------
+# Seed names.list (device friendly names) if absent. Never clobber existing.
+[ -f "$WA_DIR/names.list" ] || touch "$WA_DIR/names.list"
+
+# ---- 2. Install helper, failover hook, web UI, OUI database -----------------
 mkdir -p "$LIB_DIR" "$PT_DIR" /www/cgi-bin
 if [ -d "$SRC" ]; then
 	for pair in \
@@ -83,8 +88,17 @@ if [ -d "$SRC" ]; then
 			chmod +x "$d"
 		fi
 	done
+
+	# oui.db is a data file (not executable); deploy separately
+	if [ -f "$SRC/oui.db" ]; then
+		[ -f "$LIB_DIR/oui.db" ] && cp "$LIB_DIR/oui.db" "$LIB_DIR/oui.db.bak.$TS"
+		cp "$SRC/oui.db" "$LIB_DIR/oui.db"
+		echo "Installed oui.db ($(wc -l < "$LIB_DIR/oui.db") entries)."
+	else
+		echo "NOTE: $SRC/oui.db not found - vendor lookup will be unavailable in the UI." >&2
+	fi
 else
-	echo "NOTE: companion dir $SRC not found - assuming apply/098/cgi already deployed." >&2
+	echo "NOTE: companion dir $SRC not found - assuming apply/098/cgi/oui already deployed." >&2
 fi
 
 # ---- 3. Retire superseded artifacts -----------------------------------------
@@ -115,9 +129,9 @@ echo
 echo "== ip rules (affinity) =="
 ip rule show | grep -E "lookup (100|101)|iif br-lan" || true
 echo
-echo "== table 100 (Vivo default) =="; ip route show table 100
-echo "== table 101 (Claro) =="; ip route show table 101
+echo "== table 100 (WAN1 default) =="; ip route show table 100
+echo "== table 101 (WAN2) =="; ip route show table 101
 echo
 echo "Web UI: http://192.168.100.1/cgi-bin/wan-affinity"
-echo "Done. Verify a Claro device shows the Claro public IP and a default device"
-echo "shows the Vivo public IP, both stable across repeated calls."
+echo "Done. Verify a WAN2 device shows the WAN2 public IP and a default device"
+echo "shows the WAN1 public IP, both stable across repeated calls."

@@ -79,6 +79,22 @@ migration rejected, anti-fraud resets). Apply via `scripts/configure-wan-affinit
 To change a device's WAN, edit the lock lists and re-apply (see
 [TROUBLESHOOTING](TROUBLESHOOTING.md)), or use the device-management WebUI.
 
+**WebUI features (v2)**
+
+- **OUI vendor lookup** - for devices with no DHCP hostname or custom name, the
+  UI shows the hardware vendor derived from an offline IEEE OUI database
+  (`/usr/lib/wan-affinity/oui.db`, ~39 000 entries, deployed by the installer).
+  No network call is made; lookup is a single awk pass on the ~1 MB local file.
+- **Device renaming** - click the pencil icon next to any device name to assign
+  a persistent friendly name. Names are stored in `/etc/wan-affinity/names.list`
+  (format: `mac|name`, one per line) and survive reboots. Renaming does not
+  affect routing and does not call `apply-affinity.sh`.
+- **Live per-device bandwidth** - the device table includes Down and Up columns
+  showing current throughput in kb/s or Mb/s. Rates are computed server-side
+  from two conntrack snapshots ~1 s apart (single awk pass each); no background
+  daemon is required. Each page refresh takes ~1 s. A "Live" checkbox enables
+  3 s auto-refresh for continuous monitoring.
+
 ## Interface map
 
 | Interface | Type | Subnet / addr | Role |

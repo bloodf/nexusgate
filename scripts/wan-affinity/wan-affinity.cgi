@@ -11,14 +11,12 @@
 #   The HTML page is served by GET and contains NO server-rendered device rows.
 #   All mutations go through fetch(POST), so a browser reload never re-submits.
 #
-# POST WIRE FORMAT: a single urlencoded field "pairs", value = comma-separated
-#   MAC|w tokens where w is v (wan1/vivo), c (wan2/claro), or d/absent (default).
-#   Example decoded: aa:bb:cc:dd:ee:ff|c,11:22:33:44:55:66|v
-#   This compact format is intentionally free of eval/injection surface:
-#   MACs are only ever data values, never shell-expanded as variable names.
-#   The previous version used eval "MAC_$idx=$v" / "WAN_$idx=$w" which required
-#   a strict numeric-index guard to prevent injection; that guard is gone here
-#   because there is nothing to inject into.
+# POST WIRE FORMAT:
+#   action=save (default / no action field): field "pairs", value = comma-separated
+#     MAC|w tokens where w is v (wan1/vivo), c (wan2/claro), or d/absent (default).
+#     Example decoded: aa:bb:cc:dd:ee:ff|c,11:22:33:44:55:66|v
+#   action=rename: fields "mac" and "name". Updates names.list.
+#     Returns {"ok":true,"msg":"Name saved."} or {"ok":false,"msg":"..."}.
 #
 # Device discovery: /tmp/dhcp.leases (IP/MAC/name) merged with any locked MACs
 #   that are currently offline (so a device lock is never silently dropped).
@@ -38,11 +36,21 @@
 #   The previous Vivo/Claro ISP names were internal deployment details; the UI
 #   now uses provider-agnostic labels so the same script works on any dual-WAN
 #   NexusGate deployment.
+#
+# NEW (v2):
+#   - Offline OUI vendor lookup via /usr/lib/wan-affinity/oui.db for nameless
+#     devices (deployed by configure-wan-affinity.sh).
+#   - Editable device names persisted in /etc/wan-affinity/names.list.
+#     Renaming does NOT call apply-affinity.sh (names don't affect routing).
+#   - Live per-device up/down Kbps from conntrack dual-sample (~1s added latency
+#     to api=devices). No background daemon required.
 
 WA_DIR=/etc/wan-affinity
 CLARO_LIST="$WA_DIR/claro.list"
 VIVO_LIST="$WA_DIR/vivo.list"
+NAMES_LIST="$WA_DIR/names.list"
 APPLY=/usr/lib/wan-affinity/apply-affinity.sh
+OUI_DB=/usr/lib/wan-affinity/oui.db
 LEASES=/tmp/dhcp.leases
 
 mkdir -p "$WA_DIR"
@@ -59,20 +67,35 @@ norm_mac() {
 	echo "$m" | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' && printf '%s' "$m"
 }
 
-# JSON-escape an arbitrary string: escape backslash, double-quote, and control
-# chars (\t \n \r and any byte < 0x20). Safe for embedding in JSON string values.
-# Names are rendered by JS as textContent (never innerHTML), so this is primarily
-# a JSON structural-integrity guard.
+# JSON-escape an arbitrary string: escape backslash, double-quote, tab, CR, LF.
+# Using sed with literal control chars embedded via printf for busybox compat
+# (no GNU sed -z, no multi-line sed). Names are sanitized before storage but
+# we harden the encoder here so the JSON envelope is always structurally safe.
 jsonesc() {
 	printf '%s' "$1" | sed \
 		-e 's/\\/\\\\/g' \
 		-e 's/"/\\"/g' \
 		-e 's/	/\\t/g' \
-		-e 's/\r/\\r/g'
+		-e "s/$(printf '\r')/\\\\r/g" \
+		-e "s/$(printf '\n')/\\\\n/g"
 }
 
 in_list() { # mac listfile
 	[ -f "$2" ] && grep -qiE "^[[:space:]]*$1[[:space:]]*$" "$2"
+}
+
+# Look up OUI vendor for a MAC address. Returns vendor string or empty.
+# Only called for devices with no resolved name (avoids awk startup cost per row).
+oui_vendor() { # mac -> vendor string or empty
+	[ -f "$OUI_DB" ] || return 0
+	p=$(printf '%s' "$1" | tr -d ':' | cut -c1-6 | tr 'a-f' 'A-F')
+	awk -F'\t' -v k="$p" '$1==k{print $2; exit}' "$OUI_DB"
+}
+
+# Read custom device name from names.list (format: mac|name per line).
+cname() { # mac -> custom name or empty
+	[ -f "$NAMES_LIST" ] || return 0
+	awk -F'|' -v m="$1" '$1==m{sub(/^[^|]*\|/,""); print; exit}' "$NAMES_LIST"
 }
 
 # ---- read provider labels (provider-agnostic) ----------------------------------
@@ -88,20 +111,60 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 	len=${CONTENT_LENGTH:-0}
 	body=$(dd bs=1 count="$len" 2>/dev/null)
 
-	# Extract "pairs" field from urlencoded body (single pass, no eval)
+	# Extract fields from urlencoded body (single pass, no eval)
 	pairs_raw=""
+	post_action=""
+	post_mac=""
+	post_name=""
 	OLD_IFS=$IFS
 	IFS='&'
 	for kv in $body; do
 		k="${kv%%=*}"
 		v="${kv#*=}"
 		dk=$(urldecode "$k")
+		dv=$(urldecode "$v")
 		case "$dk" in
-			pairs) pairs_raw=$(urldecode "$v") ;;
+			action) post_action="$dv" ;;
+			pairs)  pairs_raw="$dv" ;;
+			mac)    post_mac="$dv" ;;
+			name)   post_name="$dv" ;;
 		esac
 	done
 	IFS=$OLD_IFS
 
+	# ---- action=rename: update device friendly name ----------------------------
+	if [ "$post_action" = "rename" ]; then
+		cm=$(norm_mac "$post_mac")
+		if [ -z "$cm" ]; then
+			printf '{"ok":false,"msg":"Invalid MAC address."}'
+			exit 0
+		fi
+
+		# SANITIZE name hard: hostile free-text written to disk and re-served as JSON.
+		# 1. Strip ALL CR and LF - newlines would inject extra mac|name lines (critical).
+		# 2. Strip pipe - field separator in names.list.
+		# 3. Collapse runs of whitespace to single space, trim edges.
+		# 4. Cap at 48 chars.
+		safe_name=$(printf '%s' "$post_name" \
+			| tr -d '\r\n|' \
+			| sed 's/[[:space:]][[:space:]]*/  /g; s/^[[:space:]]*//; s/[[:space:]]*$//' \
+			| cut -c1-48)
+
+		# Atomically rewrite names.list: write all lines except the existing entry
+		# for this mac, then append the new one (skip if empty = delete custom name).
+		touch "$NAMES_LIST" 2>/dev/null || true
+		tmp=$(mktemp /tmp/names_wa.XXXXXX)
+		awk -F'|' -v m="$cm" '$1!=m{print}' "$NAMES_LIST" > "$tmp" 2>/dev/null || true
+		if [ -n "$safe_name" ]; then
+			printf '%s|%s\n' "$cm" "$safe_name" >> "$tmp"
+		fi
+		mv "$tmp" "$NAMES_LIST"
+
+		printf '{"ok":true,"msg":"Name saved."}'
+		exit 0
+	fi
+
+	# ---- action=save (default): bulk WAN assignment ----------------------------
 	newvivo=""
 	newclaro=""
 
@@ -159,6 +222,58 @@ case "${QUERY_STRING:-}" in
 		t100e=$(jsonesc "$t100")
 		t101e=$(jsonesc "$t101")
 
+		# ---- conntrack bandwidth snapshot (two samples ~1s apart) ---------------
+		# For each nf_conntrack line: if ORIGINAL src= is a LAN IP (192.168.100.x),
+		# accumulate bytes= values. On each nf_conntrack line, the two bytes= tokens
+		# appear in order: first = original direction (upload for LAN src), second =
+		# reply direction (download for LAN src). Single awk pass per snapshot.
+		LAN_PFX="192.168.100."
+		SNAP_A=/tmp/wa_snap_a.$$
+		SNAP_B=/tmp/wa_snap_b.$$
+
+		_snap() {
+			awk -v pfx="$LAN_PFX" '
+			{
+				src=""; b1=0; b2=0; bc=0
+				for(i=1;i<=NF;i++){
+					fi=$i
+					if(src=="" && substr(fi,1,4)=="src="){
+						v=substr(fi,5)
+						if(substr(v,1,length(pfx))==pfx) src=v
+					}
+					if(substr(fi,1,6)=="bytes="){
+						bc++
+						if(bc==1) b1=substr(fi,7)+0
+						if(bc==2) b2=substr(fi,7)+0
+					}
+				}
+				if(src!=""){
+					up[src]+=b1
+					dn[src]+=b2
+				}
+			}
+			END{ for(ip in up) print ip, up[ip], dn[ip] }
+			' /proc/net/nf_conntrack 2>/dev/null
+		}
+
+		_snap > "$SNAP_A"
+		sleep 1
+		_snap > "$SNAP_B"
+
+		# Join snapshots by IP; rate_kbps = (B-A)*8/1000 over ~1s; clamp negatives.
+		RATES=/tmp/wa_rates.$$
+		awk '
+		NR==FNR{ ua[$1]=$2; da[$1]=$3; next }
+		{
+			du=$2-ua[$1]+0; dd=$3-da[$1]+0
+			if(du<0)du=0
+			if(dd<0)dd=0
+			printf "%s %d %d\n",$1,int(du*8/1000),int(dd*8/1000)
+		}
+		' "$SNAP_A" "$SNAP_B" > "$RATES"
+
+		rm -f "$SNAP_A" "$SNAP_B"
+
 		printf '{"meta":{"wan1_label":"%s","wan2_label":"%s","table100_dev":"%s","table101_dev":"%s"},"devices":[' \
 			"$w1l" "$w2l" "$t100e" "$t101e"
 
@@ -180,13 +295,39 @@ case "${QUERY_STRING:-}" in
 				online_val="false"
 				[ "$ip" != "-" ] && is_online "$ip" && online_val="true"
 
-				[ "$name" = "*" ] && name="-"
+				# Name resolution priority: custom > dhcp (skip "*" "-") > empty
+				custom=$(cname "$m")
+				if [ -n "$custom" ]; then
+					resolved="$custom"
+				elif [ "$name" != "*" ] && [ "$name" != "-" ] && [ -n "$name" ]; then
+					resolved="$name"
+				else
+					resolved=""
+				fi
+
+				# Vendor only for nameless devices (skip awk startup cost for named ones)
+				vendor=""
+				[ -z "$resolved" ] && vendor=$(oui_vendor "$m")
+
+				# Rates: look up by IP in RATES file
+				up_kbps=0
+				dn_kbps=0
+				if [ "$ip" != "-" ] && [ -f "$RATES" ]; then
+					_rate=$(awk -v ip="$ip" '$1==ip{print $2,$3; exit}' "$RATES")
+					if [ -n "$_rate" ]; then
+						up_kbps=${_rate%% *}
+						dn_kbps=${_rate##* }
+					fi
+				fi
+
 				jm=$(jsonesc "$m")
 				ji=$(jsonesc "$ip")
-				jn=$(jsonesc "$name")
+				jn=$(jsonesc "$resolved")
+				jv=$(jsonesc "$vendor")
+				jc=$(jsonesc "$custom")
 
-				printf '%s{"mac":"%s","ip":"%s","name":"%s","online":%s,"wan":"%s"}' \
-					"$sep" "$jm" "$ji" "$jn" "$online_val" "$wan"
+				printf '%s{"mac":"%s","ip":"%s","name":"%s","vendor":"%s","custom_name":"%s","online":%s,"wan":"%s","up_kbps":%s,"down_kbps":%s}' \
+					"$sep" "$jm" "$ji" "$jn" "$jv" "$jc" "$online_val" "$wan" "$up_kbps" "$dn_kbps"
 				sep=","
 			done < "$LEASES"
 		fi
@@ -204,13 +345,23 @@ case "${QUERY_STRING:-}" in
 				in_list "$m" "$VIVO_LIST"  && wan="wan1"
 				in_list "$m" "$CLARO_LIST" && wan="wan2"
 
-				jm=$(jsonesc "$m")
+				custom=$(cname "$m")
+				resolved="$custom"
+				vendor=""
+				[ -z "$resolved" ] && vendor=$(oui_vendor "$m")
 
-				printf '%s{"mac":"%s","ip":"-","name":"-","online":false,"wan":"%s"}' \
-					"$sep" "$jm" "$wan"
+				jm=$(jsonesc "$m")
+				jn=$(jsonesc "$resolved")
+				jv=$(jsonesc "$vendor")
+				jc=$(jsonesc "$custom")
+
+				printf '%s{"mac":"%s","ip":"-","name":"%s","vendor":"%s","custom_name":"%s","online":false,"wan":"%s","up_kbps":0,"down_kbps":0}' \
+					"$sep" "$jm" "$jn" "$jv" "$jc" "$wan"
 				sep=","
 			done < "$lf"
 		done
+
+		rm -f "$RATES"
 
 		printf ']}'
 		exit 0
@@ -240,7 +391,7 @@ cat <<HTMLHEAD
 :root{color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0e1116;color:#e6edf3}
-.wrap{max-width:860px;margin:0 auto;padding:18px 16px}
+.wrap{max-width:960px;margin:0 auto;padding:18px 16px}
 /* ---- header bar ---- */
 .hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 4px}
 h1{font-size:19px;margin:0;flex:1 1 auto}
@@ -251,6 +402,8 @@ h1{font-size:19px;margin:0;flex:1 1 auto}
 .toolbar{display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap}
 .toolbar input[type=search]{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:7px 10px;font-size:13px;width:220px;flex:1 1 160px;max-width:320px}
 .toolbar input[type=search]::placeholder{color:#484f58}
+.live-label{font-size:13px;color:#8b949e;display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.live-label input{cursor:pointer}
 /* ---- meta line ---- */
 .meta{color:#8b949e;font-size:13px;margin:0 0 12px}
 .meta b{color:#e6edf3}
@@ -297,6 +450,16 @@ button{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:60
 /* ---- dirty badge ---- */
 .dirty-badge{font-size:12px;color:#e3b341;background:#2d2207;border:1px solid #6a4a0a;border-radius:6px;padding:3px 8px;display:none}
 .dirty-badge.show{display:inline-block}
+/* ---- name cell ---- */
+.name-wrap{display:flex;align-items:center;gap:5px;min-width:0}
+.name-edit-btn{background:none;border:none;padding:1px 4px;font-size:13px;color:#484f58;cursor:pointer;border-radius:4px;line-height:1;flex-shrink:0}
+.name-edit-btn:hover{color:#8b949e;background:#21262d}
+.name-vendor{color:#8b949e;font-style:italic;font-size:13px}
+.name-input{background:#0d1117;color:#e6edf3;border:1px solid #58a6ff;border-radius:5px;padding:3px 6px;font-size:13px;min-width:80px;width:160px}
+/* ---- rate columns ---- */
+td.rate{font-variant-numeric:tabular-nums;font-size:13px;color:#8b949e;text-align:right;white-space:nowrap}
+td.rate.active{color:#e6edf3}
+.rate-muted{color:#484f58}
 /* ---- add-device panel ---- */
 .add-panel{margin-top:18px;padding:14px;background:#161b22;border:1px solid #21262d;border-radius:10px}
 .add-panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:#9da7b3;margin:0 0 10px}
@@ -313,6 +476,7 @@ button{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:60
   .seg label{padding:5px 6px;font-size:11px}
   td,th{padding:7px 6px;font-size:13px}
   .mac{font-size:11px}
+  .col-down,.col-up{display:none}
 }
 </style>
 </head>
@@ -334,6 +498,9 @@ button{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:60
   <input type="search" id="search" placeholder="Filter by IP, MAC or name&hellip;" oninput="filterRows()" autocomplete="off" autocapitalize="off" spellcheck="false">
   <span class="dirty-badge" id="dirty-badge"></span>
   <button class="btn-save" id="btn-save" disabled onclick="saveChanges()">Save &amp; apply</button>
+  <label class="live-label" title="Auto-refresh every 3 seconds (each refresh takes ~1s for rate sampling)">
+    <input type="checkbox" id="live-chk" onchange="toggleLive()"> Live
+  </label>
 </div>
 
 <table id="dev-table">
@@ -343,11 +510,13 @@ button{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:60
       <th onclick="sortBy('ip')" id="th-ip">IP <span class="sort-arrow"></span></th>
       <th onclick="sortBy('mac')" id="th-mac">MAC <span class="sort-arrow"></span></th>
       <th onclick="sortBy('name')" id="th-name">Name <span class="sort-arrow"></span></th>
+      <th onclick="sortBy('down_kbps')" id="th-down" class="col-down">&#8595; Down <span class="sort-arrow"></span></th>
+      <th onclick="sortBy('up_kbps')" id="th-up" class="col-up">&#8593; Up <span class="sort-arrow"></span></th>
       <th>WAN</th>
     </tr>
   </thead>
   <tbody id="dev-body">
-    <tr><td colspan="5" style="text-align:center;padding:20px;color:#8b949e">Loading&hellip;</td></tr>
+    <tr><td colspan="7" style="text-align:center;padding:20px;color:#8b949e">Loading&hellip;</td></tr>
   </tbody>
 </table>
 
@@ -369,6 +538,9 @@ button{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:60
   Green dot = currently reachable (REACHABLE/STALE/DELAY/PROBE in ARP table).
   &ldquo;Default&rdquo; = unlocked device follows the default WAN.
   Locking pins the device to one WAN with automatic failover.
+  Click &#9998; to rename a device (stored in /etc/wan-affinity/names.list, survives reboots).
+  Italic muted text = offline OUI vendor lookup (no custom name set).
+  Rates from conntrack; each refresh takes ~1s. Enable Live for continuous updates.
 </p>
 
 </div><!-- .wrap -->
@@ -378,10 +550,12 @@ var WAN1_LABEL = '$w1l_js';
 var WAN2_LABEL = '$w2l_js';
 
 // ---- state ------------------------------------------------------------------
-var devices = [];       // current server state: [{mac,ip,name,online,wan}, ...]
+// devices: [{mac,ip,name,vendor,custom_name,online,wan,up_kbps,down_kbps}, ...]
+var devices = [];
 var overrides = {};     // {mac -> wan} for user-edited rows (dirty state)
 var sortKey = 'online'; // default: online-first
 var sortAsc = true;
+var liveTimer = null;
 
 // ---- init -------------------------------------------------------------------
 document.getElementById('add-opt-wan2').textContent = WAN2_LABEL + ' (locked)';
@@ -389,6 +563,16 @@ document.getElementById('add-opt-wan1').textContent = WAN1_LABEL + ' (locked)';
 document.getElementById('add-opt-wan2').value = 'c';
 document.getElementById('add-opt-wan1').value = 'v';
 refreshDevices();
+
+// ---- live toggle ------------------------------------------------------------
+function toggleLive() {
+  var chk = document.getElementById('live-chk');
+  if (chk.checked) {
+    liveTimer = setInterval(refreshDevices, 3000);
+  } else {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  }
+}
 
 // ---- fetch device list ------------------------------------------------------
 function refreshDevices() {
@@ -438,9 +622,10 @@ function sortBy(key) {
 }
 
 function updateSortHeaders() {
-  var cols = ['online','ip','mac','name'];
+  var cols = ['online','ip','mac','name','down_kbps','up_kbps'];
+  var ids  = ['online','ip','mac','name','down',     'up'     ];
   for (var i = 0; i < cols.length; i++) {
-    var th = document.getElementById('th-' + cols[i]);
+    var th = document.getElementById('th-' + ids[i]);
     if (!th) continue;
     var arrow = th.querySelector('.sort-arrow');
     if (cols[i] === sortKey) {
@@ -454,22 +639,26 @@ function updateSortHeaders() {
 }
 
 function compareRows(a, b) {
-  var wa = overrides[a.mac] !== undefined ? overrides[a.mac] : a.wan;
-  var wb = overrides[b.mac] !== undefined ? overrides[b.mac] : b.wan;
+  var av, bv, c;
   if (sortKey === 'online') {
-    // online-first, then by name/ip secondary
     if (a.online !== b.online) return a.online ? -1 : 1;
     return (a.name || a.ip || '').localeCompare(b.name || b.ip || '');
   }
-  var av, bv;
   if (sortKey === 'ip') {
-    // numeric IP sort
     av = ipToNum(a.ip); bv = ipToNum(b.ip);
+    return sortAsc ? av - bv : bv - av;
+  }
+  if (sortKey === 'down_kbps') {
+    av = a.down_kbps || 0; bv = b.down_kbps || 0;
+    return sortAsc ? av - bv : bv - av;
+  }
+  if (sortKey === 'up_kbps') {
+    av = a.up_kbps || 0; bv = b.up_kbps || 0;
     return sortAsc ? av - bv : bv - av;
   }
   if (sortKey === 'mac') { av = a.mac; bv = b.mac; }
   else { av = a.name || a.ip || ''; bv = b.name || b.ip || ''; }
-  var c = av.localeCompare(bv);
+  c = av.localeCompare(bv);
   return sortAsc ? c : -c;
 }
 
@@ -478,6 +667,13 @@ function ipToNum(ip) {
   var parts = ip.split('.');
   return ((parseInt(parts[0],10)||0)*16777216 + (parseInt(parts[1],10)||0)*65536 +
           (parseInt(parts[2],10)||0)*256 + (parseInt(parts[3],10)||0));
+}
+
+// format kbps -> display string; null means zero (caller shows muted dot)
+function fmtRate(kbps) {
+  if (!kbps || kbps <= 0) return null;
+  if (kbps < 1000) return kbps + ' kb/s';
+  return (kbps / 1000).toFixed(1) + ' Mb/s';
 }
 
 // ---- render -----------------------------------------------------------------
@@ -490,7 +686,7 @@ function renderTable() {
     var etr = document.createElement('tr');
     etr.className = 'empty-row';
     var etd = document.createElement('td');
-    etd.colSpan = 5;
+    etd.colSpan = 7;
     etd.textContent = 'No devices found - is anything connected?';
     etr.appendChild(etd);
     tbody.appendChild(etr);
@@ -514,11 +710,11 @@ function renderTable() {
 
     // hide if filter doesn't match
     if (filter) {
-      var haystack = (d.ip + ' ' + d.mac + ' ' + d.name).toLowerCase();
+      var haystack = ((d.ip||'') + ' ' + d.mac + ' ' + (d.name||'') + ' ' + (d.vendor||'')).toLowerCase();
       if (haystack.indexOf(filter) === -1) tr.classList.add('hidden-row');
     }
 
-    // dot
+    // col: online dot
     var tdDot = document.createElement('td');
     var dot = document.createElement('span');
     dot.className = 'dot dot-' + (d.online ? 'on' : 'off');
@@ -526,23 +722,51 @@ function renderTable() {
     tdDot.appendChild(dot);
     tr.appendChild(tdDot);
 
-    // ip
+    // col: ip
     var tdIp = document.createElement('td');
     tdIp.textContent = d.ip === '-' ? '' : d.ip;
     tr.appendChild(tdIp);
 
-    // mac
+    // col: mac
     var tdMac = document.createElement('td');
     tdMac.className = 'mac';
     tdMac.textContent = d.mac;
     tr.appendChild(tdMac);
 
-    // name
+    // col: name (with inline edit)
     var tdName = document.createElement('td');
-    tdName.textContent = (d.name === '-' || !d.name) ? '' : d.name;
+    tdName.appendChild(makeNameCell(d));
     tr.appendChild(tdName);
 
-    // WAN segmented control
+    // col: down rate
+    var tdDown = document.createElement('td');
+    tdDown.className = 'rate col-down';
+    var dnStr = fmtRate(d.down_kbps);
+    if (dnStr) {
+      tdDown.textContent = dnStr;
+      tdDown.classList.add('active');
+    } else {
+      var sp1 = document.createElement('span');
+      sp1.className = 'rate-muted'; sp1.textContent = '·';
+      tdDown.appendChild(sp1);
+    }
+    tr.appendChild(tdDown);
+
+    // col: up rate
+    var tdUp = document.createElement('td');
+    tdUp.className = 'rate col-up';
+    var upStr = fmtRate(d.up_kbps);
+    if (upStr) {
+      tdUp.textContent = upStr;
+      tdUp.classList.add('active');
+    } else {
+      var sp2 = document.createElement('span');
+      sp2.className = 'rate-muted'; sp2.textContent = '·';
+      tdUp.appendChild(sp2);
+    }
+    tr.appendChild(tdUp);
+
+    // col: WAN segmented control
     var tdWan = document.createElement('td');
     tdWan.appendChild(makeSegControl(d.mac, curWan));
     tr.appendChild(tdWan);
@@ -554,15 +778,102 @@ function renderTable() {
   updateSortHeaders();
 }
 
+// ---- name cell: display name or vendor, pencil edit button ------------------
+function makeNameCell(d) {
+  var wrap = document.createElement('div');
+  wrap.className = 'name-wrap';
+
+  var nameSpan = document.createElement('span');
+  if (d.name) {
+    nameSpan.textContent = d.name; // resolved name (custom or dhcp); textContent = XSS-safe
+  } else if (d.vendor) {
+    nameSpan.className = 'name-vendor';
+    nameSpan.textContent = '~ ' + d.vendor; // OUI vendor, muted italic
+  }
+  wrap.appendChild(nameSpan);
+
+  var editBtn = document.createElement('button');
+  editBtn.className = 'name-edit-btn';
+  editBtn.textContent = '✎'; // pencil
+  editBtn.title = 'Rename device';
+  editBtn.type = 'button';
+  // capture d by value via IIFE to avoid closure-over-loop-variable issue
+  (function(dev) {
+    editBtn.addEventListener('click', function() {
+      startNameEdit(dev, wrap, nameSpan, editBtn);
+    });
+  })(d);
+  wrap.appendChild(editBtn);
+
+  return wrap;
+}
+
+function startNameEdit(d, wrap, nameSpan, editBtn) {
+  nameSpan.style.display = 'none';
+  editBtn.style.display = 'none';
+
+  var inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'name-input';
+  inp.value = d.custom_name || '';
+  inp.maxLength = 48;
+  inp.placeholder = 'Device name (empty = clear)';
+  wrap.insertBefore(inp, editBtn);
+  inp.focus();
+  inp.select();
+
+  var committed = false;
+
+  function commitEdit() {
+    if (committed) return;
+    committed = true;
+    inp.disabled = true;
+    fetch(window.location.pathname, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'action=rename&mac=' + encodeURIComponent(d.mac) + '&name=' + encodeURIComponent(inp.value)
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          refreshDevices();
+        } else {
+          showToast(res.msg || 'Rename failed.', 'err');
+          cancelEdit();
+        }
+      })
+      .catch(function(e){
+        showToast('Rename failed: ' + e.message, 'err');
+        cancelEdit();
+      });
+  }
+
+  function cancelEdit() {
+    committed = true;
+    if (inp.parentNode) inp.parentNode.removeChild(inp);
+    nameSpan.style.display = '';
+    editBtn.style.display = '';
+  }
+
+  inp.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter')  { e.preventDefault(); commitEdit(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+  });
+  // blur: commit after short delay so Escape keydown fires first
+  inp.addEventListener('blur', function() {
+    setTimeout(function(){ commitEdit(); }, 120);
+  });
+}
+
 function makeSegControl(mac, curWan) {
   var seg = document.createElement('div');
   seg.className = 'seg';
   var nm = 'w_' + mac.replace(/:/g, '');
 
   var opts = [
-    {val:'default', label:'Default',          cls:'lbl-default'},
-    {val:'wan1',    label:WAN1_LABEL,          cls:'lbl-wan1'},
-    {val:'wan2',    label:WAN2_LABEL,          cls:'lbl-wan2'}
+    {val:'default', label:'Default',   cls:'lbl-default'},
+    {val:'wan1',    label:WAN1_LABEL,  cls:'lbl-wan1'},
+    {val:'wan2',    label:WAN2_LABEL,  cls:'lbl-wan2'}
   ];
 
   for (var i = 0; i < opts.length; i++) {
@@ -591,7 +902,6 @@ function makeSegControl(mac, curWan) {
 function onWanChange(e) {
   var mac = e.target.dataset.mac;
   var newWan = e.target.value;
-  // find original device wan
   var orig = 'default';
   for (var i = 0; i < devices.length; i++) {
     if (devices[i].mac === mac) { orig = devices[i].wan; break; }
@@ -601,11 +911,8 @@ function onWanChange(e) {
   } else {
     overrides[mac] = newWan;
   }
-  // update row accent
   var tr = document.querySelector('tr[data-mac="' + mac + '"]');
-  if (tr) {
-    tr.className = 'r-' + newWan;
-  }
+  if (tr) { tr.className = 'r-' + newWan; }
   updateDirty();
 }
 
@@ -638,7 +945,6 @@ function saveChanges() {
     tokens.push(d.mac + '|' + w);
   }
 
-  // Encode and POST
   var encoded = encodeURIComponent(tokens.join(','));
   fetch(window.location.pathname, {
     method: 'POST',
@@ -687,7 +993,7 @@ function addDevice() {
   var wan = wanCode === 'v' ? 'wan1' : wanCode === 'c' ? 'wan2' : 'default';
 
   // add to local state and mark as override
-  devices.push({mac: mac, ip: '-', name: '-', online: false, wan: 'default'});
+  devices.push({mac: mac, ip: '-', name: '', vendor: '', custom_name: '', online: false, wan: 'default', up_kbps: 0, down_kbps: 0});
   overrides[mac] = wan;
 
   macInput.value = '';
@@ -703,9 +1009,8 @@ function filterRows() {
   for (var i = 0; i < rows.length; i++) {
     var tr = rows[i];
     var mac = tr.dataset.mac || '';
-    // get ip and name from cells
     var cells = tr.querySelectorAll('td');
-    var ip = cells[1] ? cells[1].textContent : '';
+    var ip   = cells[1] ? cells[1].textContent : '';
     var name = cells[3] ? cells[3].textContent : '';
     var haystack = (ip + ' ' + mac + ' ' + name).toLowerCase();
     tr.classList.toggle('hidden-row', filter !== '' && haystack.indexOf(filter) === -1);
