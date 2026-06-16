@@ -103,6 +103,26 @@ wan2_label=$(uci -q get network.wan2.label 2>/dev/null || true)
 
 # ---- MODE 3: POST -> apply changes, return JSON --------------------------------
 if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
+	# CSRF / same-origin guard: state-changing POST must come from the same origin.
+	# A browser fetch() always sends Origin; fall back to Referer host when absent.
+	# Fail closed: if HTTP_HOST is empty, or neither Origin nor Referer resolves to
+	# a matching host, reject the request before any header or body output.
+	_req_host=""
+	if [ -n "${HTTP_ORIGIN:-}" ]; then
+		# Strip scheme: "http://host:port/..." -> "host:port"
+		_no_scheme="${HTTP_ORIGIN#*://}"
+		_req_host="${_no_scheme%%/*}"
+	elif [ -n "${HTTP_REFERER:-}" ]; then
+		_no_scheme="${HTTP_REFERER#*://}"
+		_req_host="${_no_scheme%%/*}"
+	fi
+	if [ -z "${HTTP_HOST:-}" ] || [ "$_req_host" != "$HTTP_HOST" ]; then
+		printf 'Status: 403 Forbidden\r\n'
+		printf 'Content-Type: application/json\r\n\r\n'
+		printf '{"ok":false,"msg":"cross-origin request rejected"}'
+		exit 0
+	fi
+
 	printf 'Content-Type: application/json\r\n\r\n'
 
 	# Guard non-numeric CONTENT_LENGTH and clamp to a sane cap. Unbounded dd would
@@ -195,8 +215,14 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 	done
 	IFS=$OLD_IFS
 
-	printf '%s' "$newvivo"  | sed '/^$/d' | sort -u > "$VIVO_LIST"
-	printf '%s' "$newclaro" | sed '/^$/d' | sort -u > "$CLARO_LIST"
+	# Atomic list writes: temp in $WA_DIR so mv is a same-filesystem rename (not a
+	# cross-fs copy), matching the names.list pattern at lines 164-169 above.
+	_tmp_vivo=$(mktemp "$WA_DIR/.vivo.XXXXXX")
+	printf '%s' "$newvivo"  | sed '/^$/d' | sort -u > "$_tmp_vivo"
+	mv "$_tmp_vivo" "$VIVO_LIST"
+	_tmp_claro=$(mktemp "$WA_DIR/.claro.XXXXXX")
+	printf '%s' "$newclaro" | sed '/^$/d' | sort -u > "$_tmp_claro"
+	mv "$_tmp_claro" "$CLARO_LIST"
 
 	if [ -x "$APPLY" ]; then
 		if out=$("$APPLY" 2>&1); then
@@ -235,9 +261,13 @@ case "${QUERY_STRING:-}" in
 		# accumulate bytes= values. On each nf_conntrack line, the two bytes= tokens
 		# appear in order: first = original direction (upload for LAN src), second =
 		# reply direction (download for LAN src). Single awk pass per snapshot.
-		LAN_PFX="192.168.100."
-		SNAP_A=/tmp/wa_snap_a.$$
-		SNAP_B=/tmp/wa_snap_b.$$
+		_lan_ip=$(uci -q get network.lan.ipaddr 2>/dev/null)
+		case "$_lan_ip" in
+		    *.*.*.*) LAN_PFX="${_lan_ip%.*}." ;;
+		    *) LAN_PFX="192.168.100." ;;   # fallback if uci unavailable
+		esac
+		SNAP_A=$(mktemp /tmp/wa_snap_a.XXXXXX)
+		SNAP_B=$(mktemp /tmp/wa_snap_b.XXXXXX)
 
 		_snap() {
 			awk -v pfx="$LAN_PFX" '
@@ -269,7 +299,7 @@ case "${QUERY_STRING:-}" in
 		_snap > "$SNAP_B"
 
 		# Join snapshots by IP; rate_kbps = (B-A)*8/1000 over ~1s; clamp negatives.
-		RATES=/tmp/wa_rates.$$
+		RATES=$(mktemp /tmp/wa_rates.XXXXXX)
 		awk '
 		NR==FNR{ ua[$1]=$2; da[$1]=$3; next }
 		{
@@ -379,12 +409,8 @@ esac
 # ---- MODE 1: GET (no api) -> HTML shell ----------------------------------------
 printf 'Content-Type: text/html; charset=utf-8\r\n\r\n'
 
-# Escape label for safe embedding in HTML attributes and JS string literals.
-# These go into the inline <script> block, so we need JS-string-safe values.
+# Escape labels for embedding in JS string literals (single-quoted in the heredoc).
 # Labels come from uci (trusted admin config), but escape anyway for correctness.
-w1l_html=$(printf '%s' "$wan1_label" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
-w2l_html=$(printf '%s' "$wan2_label" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
-# For embedding in JS string literals (single-quoted in the heredoc), escape backslash and single-quote
 w1l_js=$(printf '%s' "$wan1_label" | sed "s/\\\\/\\\\\\\\/g; s/'/\\\\'/g")
 w2l_js=$(printf '%s' "$wan2_label" | sed "s/\\\\/\\\\\\\\/g; s/'/\\\\'/g")
 
