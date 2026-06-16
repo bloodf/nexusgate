@@ -1,3 +1,4 @@
+# Authoritative LAN DHCP config (single source of truth). Apply per prompts/03-nic-assignment.md. The LAN bridge itself is set by scripts/configure-lan-eth3.sh.
 config dhcp 'lan'
 	option interface 'lan'
 	option start '50'

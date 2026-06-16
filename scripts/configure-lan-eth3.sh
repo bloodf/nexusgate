@@ -3,19 +3,18 @@ set -eu
 
 # Wiring: eth0 = LAN/management (admin PC), eth3 = LAN downlink to home Wi-Fi router.
 # Both bridged into br-lan.
+# DHCP is owned solely by configs/dhcp-lan.uci (the single source of truth: pool 50-249,
+# DNS push, CortexOS reservation); this script sets up only the eth0+eth3 LAN bridge.
 
 LAN_IP=${LAN_IP:-192.168.100.1}
 LAN_NETMASK=${LAN_NETMASK:-255.255.255.0}
-DHCP_START=${DHCP_START:-100}
-DHCP_LIMIT=${DHCP_LIMIT:-150}
-DHCP_LEASETIME=${DHCP_LEASETIME:-12h}
 
 uci batch <<EOF
 # Bridge eth0 + eth3 as LAN. eth3 is the home Wi-Fi router uplink.
 set network.lan_dev=device
 set network.lan_dev.name='br-lan'
 set network.lan_dev.type='bridge'
-delete network.lan_dev.ports 2>/dev/null || true
+delete network.lan_dev.ports
 add_list network.lan_dev.ports='eth0'
 add_list network.lan_dev.ports='eth3'
 
@@ -25,20 +24,13 @@ set network.lan.proto='static'
 set network.lan.ipaddr='$LAN_IP'
 set network.lan.netmask='$LAN_NETMASK'
 
-set dhcp.lan=dhcp
-set dhcp.lan.interface='lan'
-set dhcp.lan.start='$DHCP_START'
-set dhcp.lan.limit='$DHCP_LIMIT'
-set dhcp.lan.leasetime='$DHCP_LEASETIME'
-set dhcp.lan.ignore='0'
-
 commit network
-commit dhcp
 EOF
 
 /etc/init.d/network reload
 /etc/init.d/dnsmasq enable
 /etc/init.d/dnsmasq restart
 
-echo "LAN DHCP active on eth0+eth3 via br-lan at $LAN_IP"
+echo "LAN bridge configured: eth0+eth3 via br-lan at $LAN_IP"
+echo "Apply DHCP pool separately: uci import -m dhcp < configs/dhcp-lan.uci && uci commit dhcp && /etc/init.d/dnsmasq restart"
 echo "Connect home Wi-Fi router WAN/AP uplink to eth3. It will receive DHCP."
