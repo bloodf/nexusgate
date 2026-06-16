@@ -2,3 +2,9 @@
 .env*
 .DS_Store
 local/
+
+# Agent/orchestration scaffolding - never tracked.
+.omc/
+.agentic/
+**/.omc/
+lancedb/
