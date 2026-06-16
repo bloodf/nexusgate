@@ -73,7 +73,11 @@ mkdir -p "$NFT_DIR"
 ls -1t "$NFT_FILE".bak.* 2>/dev/null | tail -n +6 | while read -r f; do rm -f "$f"; done
 
 # ---- apply firewall + routing now -------------------------------------------
-fw4 reload >/dev/null 2>&1 || /etc/init.d/firewall reload >/dev/null 2>&1 || true
+if ! fw4 reload >/dev/null 2>&1; then
+	if ! /etc/init.d/firewall reload >/dev/null 2>&1; then
+		echo "WARN: fw4 reload and firewall reload both failed; nft wan_affinity chain may be stale" >&2
+	fi
+fi
 
 # Drop any legacy pri-50 br-lan->100 rule, then run the failover hook to build
 # tables 100/101 and (re)install the pri 40/41/45 rules.

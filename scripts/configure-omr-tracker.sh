@@ -23,12 +23,20 @@ WAN2_DNS2=${WAN2_DNS2:-181.213.132.3}
 
 # Auto-read ISP DNS from live leases when available.
 if command -v jsonfilter >/dev/null 2>&1; then
-	_live1=$(ifstatus wan1 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
-	_live2=$(ifstatus wan1 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	# peerdns=0 -> ISP DNS reported under "inactive"; active path covers peerdns=1.
+	# Try active path first, fall back to inactive.
+	_w1=$(ifstatus wan1 2>/dev/null || true)
+	_live1=$(echo "$_w1" | jsonfilter -e '@["dns-server"][0]' 2>/dev/null || true)
+	[ -z "$_live1" ] && _live1=$(echo "$_w1" | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_live2=$(echo "$_w1" | jsonfilter -e '@["dns-server"][1]' 2>/dev/null || true)
+	[ -z "$_live2" ] && _live2=$(echo "$_w1" | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
 	[ -n "$_live1" ] && WAN1_DNS1="$_live1"
 	[ -n "$_live2" ] && WAN1_DNS2="$_live2"
-	_live3=$(ifstatus wan2 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
-	_live4=$(ifstatus wan2 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	_w2=$(ifstatus wan2 2>/dev/null || true)
+	_live3=$(echo "$_w2" | jsonfilter -e '@["dns-server"][0]' 2>/dev/null || true)
+	[ -z "$_live3" ] && _live3=$(echo "$_w2" | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_live4=$(echo "$_w2" | jsonfilter -e '@["dns-server"][1]' 2>/dev/null || true)
+	[ -z "$_live4" ] && _live4=$(echo "$_w2" | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
 	[ -n "$_live3" ] && WAN2_DNS1="$_live3"
 	[ -n "$_live4" ] && WAN2_DNS2="$_live4"
 fi

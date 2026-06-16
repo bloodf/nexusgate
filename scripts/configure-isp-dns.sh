@@ -16,12 +16,20 @@ WAN2_DNS1=${WAN2_DNS1:-181.213.132.2}
 WAN2_DNS2=${WAN2_DNS2:-181.213.132.3}
 
 if command -v jsonfilter >/dev/null 2>&1; then
-	_live1=$(ifstatus wan1 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
-	_live2=$(ifstatus wan1 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	# peerdns=0 -> ISP DNS reported under "inactive"; active path covers peerdns=1.
+	# Try active path first, fall back to inactive.
+	_w1=$(ifstatus wan1 2>/dev/null || true)
+	_live1=$(echo "$_w1" | jsonfilter -e '@["dns-server"][0]' 2>/dev/null || true)
+	[ -z "$_live1" ] && _live1=$(echo "$_w1" | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_live2=$(echo "$_w1" | jsonfilter -e '@["dns-server"][1]' 2>/dev/null || true)
+	[ -z "$_live2" ] && _live2=$(echo "$_w1" | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
 	[ -n "$_live1" ] && WAN1_DNS1="$_live1"
 	[ -n "$_live2" ] && WAN1_DNS2="$_live2"
-	_live3=$(ifstatus wan2 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
-	_live4=$(ifstatus wan2 2>/dev/null | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	_w2=$(ifstatus wan2 2>/dev/null || true)
+	_live3=$(echo "$_w2" | jsonfilter -e '@["dns-server"][0]' 2>/dev/null || true)
+	[ -z "$_live3" ] && _live3=$(echo "$_w2" | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_live4=$(echo "$_w2" | jsonfilter -e '@["dns-server"][1]' 2>/dev/null || true)
+	[ -z "$_live4" ] && _live4=$(echo "$_w2" | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
 	[ -n "$_live3" ] && WAN2_DNS1="$_live3"
 	[ -n "$_live4" ] && WAN2_DNS2="$_live4"
 fi
@@ -56,30 +64,82 @@ echo "AdGuard backup: $BAK"
 /etc/init.d/adguardhome restart
 sleep 3
 
-# Policy-route ISP resolvers out matching WAN tables.
-# One UNIQUE priority per upstream IP. iproute drops a rule added at an
-# already-used priority, so the old same-priority loop form silently kept only
-# one IP per WAN - the dropped resolver then leaked out the default WAN and
-# timed out (Claro 181.213.132.2 over Vivo -> i/o timeout). Keep 4 distinct.
-_isp_dns_policy() {
-	_add() { ip rule show | grep -q "to $1 lookup $2" || ip rule add priority "$3" to "$1" lookup "$2"; }
-	_add "$WAN1_DNS1" 6  89
-	_add "$WAN1_DNS2" 6  90
-	_add "$WAN2_DNS1" 10 91
-	_add "$WAN2_DNS2" 10 92
-}
+# Install the persistent ISP-DNS policy helper.
+# The helper re-derives live resolver IPs at boot (lease renewal can change them),
+# so rc.local invokes logic instead of hardcoded IPs that go stale.
+HELPER=/usr/lib/nexusgate/isp-dns-policy.sh
+mkdir -p /usr/lib/nexusgate
+# Write helper with a quoted heredoc so runtime variables survive intact.
+# The fallback IP defaults below are interpolated NOW (install time) from the
+# currently resolved values; everything else is literal and runs at boot time.
+cat > "$HELPER" <<EOF
+#!/bin/sh
+# /usr/lib/nexusgate/isp-dns-policy.sh
+# Policy-route ISP resolvers out their own WAN tables (6=wan1, 10=wan2).
+# Re-derives live IPs from leases each run; falls back to deployment defaults.
+# Priorities 89-92 are unique per IP - iproute drops rules at duplicate priorities,
+# which silently loses one resolver and causes cross-WAN DNS leaks.
+# peerdns=0 -> ISP DNS under "inactive"; active path covers peerdns=1.
+set -u
 
-_isp_dns_policy
+WAN1_DNS1_DEF=${WAN1_DNS1}
+WAN1_DNS2_DEF=${WAN1_DNS2}
+WAN2_DNS1_DEF=${WAN2_DNS1}
+WAN2_DNS2_DEF=${WAN2_DNS2}
 
-# Persist across reboot (idempotent append).
+WAN1_DNS1=\$WAN1_DNS1_DEF
+WAN1_DNS2=\$WAN1_DNS2_DEF
+WAN2_DNS1=\$WAN2_DNS1_DEF
+WAN2_DNS2=\$WAN2_DNS2_DEF
+
+if command -v jsonfilter >/dev/null 2>&1; then
+	_w1=\$(ifstatus wan1 2>/dev/null || true)
+	_l1=\$(echo "\$_w1" | jsonfilter -e '@["dns-server"][0]' 2>/dev/null || true)
+	[ -z "\$_l1" ] && _l1=\$(echo "\$_w1" | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_l2=\$(echo "\$_w1" | jsonfilter -e '@["dns-server"][1]' 2>/dev/null || true)
+	[ -z "\$_l2" ] && _l2=\$(echo "\$_w1" | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	[ -n "\$_l1" ] && WAN1_DNS1="\$_l1"
+	[ -n "\$_l2" ] && WAN1_DNS2="\$_l2"
+	_w2=\$(ifstatus wan2 2>/dev/null || true)
+	_l3=\$(echo "\$_w2" | jsonfilter -e '@["dns-server"][0]' 2>/dev/null || true)
+	[ -z "\$_l3" ] && _l3=\$(echo "\$_w2" | jsonfilter -e '@["inactive"]["dns-server"][0]' 2>/dev/null || true)
+	_l4=\$(echo "\$_w2" | jsonfilter -e '@["dns-server"][1]' 2>/dev/null || true)
+	[ -z "\$_l4" ] && _l4=\$(echo "\$_w2" | jsonfilter -e '@["inactive"]["dns-server"][1]' 2>/dev/null || true)
+	[ -n "\$_l3" ] && WAN2_DNS1="\$_l3"
+	[ -n "\$_l4" ] && WAN2_DNS2="\$_l4"
+fi
+
+_add() { ip rule show | grep -q "to \$1 lookup \$2" || ip rule add priority "\$3" to "\$1" lookup "\$2" 2>/dev/null || true; }
+_add "\$WAN1_DNS1" 6  89
+_add "\$WAN1_DNS2" 6  90
+_add "\$WAN2_DNS1" 10 91
+_add "\$WAN2_DNS2" 10 92
+EOF
+chmod +x "$HELPER"
+
+# Apply policy rules live now using the installed helper.
+"$HELPER"
+
+# Persist across reboot: invoke the helper so boot always re-derives live IPs
+# (hardcoded IPs go stale on lease renewal and route the new resolver out the
+# wrong WAN, reproducing the i/o-timeout DNS leak).
+#
+# Normalize the rc.local DNS-policy persistence idempotently. This MIGRATES boxes
+# that ran the old installer (which wrote the MARK plus 4 hardcoded resolver-IP
+# rules) to the re-derivation helper, and is safe to re-run.
 RC=/etc/rc.local
 MARK="# nexusgate-isp-dns-policy"
-if ! grep -q "$MARK" "$RC" 2>/dev/null; then
+if [ -f "$RC" ]; then
+	# strip any prior nexusgate DNS-policy lines: the MARK, legacy hardcoded
+	# resolver rules (priorities 89-92 -> tables 6/10), and any prior helper call.
+	# Use | as the sed address delimiter: MARK begins with # and HELPER contains
+	# /, so neither # nor / is a safe delimiter; neither string contains |.
+	sed -i "\\|$MARK|d" "$RC"
+	sed -i '/ip rule add priority 89 to .* lookup 6/d; /ip rule add priority 90 to .* lookup 6/d; /ip rule add priority 91 to .* lookup 10/d; /ip rule add priority 92 to .* lookup 10/d' "$RC"
+	sed -i "\\|$HELPER|d" "$RC"
+	# (re)insert MARK + helper call before exit 0
 	sed -i "/^exit 0/i $MARK" "$RC"
-	sed -i "/^exit 0/i ip rule add priority 89 to $WAN1_DNS1 lookup 6 2>/dev/null" "$RC"
-	sed -i "/^exit 0/i ip rule add priority 90 to $WAN1_DNS2 lookup 6 2>/dev/null" "$RC"
-	sed -i "/^exit 0/i ip rule add priority 91 to $WAN2_DNS1 lookup 10 2>/dev/null" "$RC"
-	sed -i "/^exit 0/i ip rule add priority 92 to $WAN2_DNS2 lookup 10 2>/dev/null" "$RC"
+	sed -i "/^exit 0/i $HELPER 2>/dev/null || true" "$RC"
 fi
 
 echo
