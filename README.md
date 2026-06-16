@@ -105,7 +105,7 @@ A single device is capped at one WAN link (~1Gb). Splitting one flow across two 
 2. Install LuCI addons via `scripts/install-luci-addons.sh`.
 3. Configure LAN bridge (eth0+eth3) via `scripts/configure-lan-eth3.sh`.
 4. Configure WAN1 PPPoE via `scripts/configure-wan-pppoe.sh` and WAN2 DHCP.
-5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (retires the old `ecmp-balance.sh` load balancer; set `CLARO_MACS`/`VIVO_MACS` to your lock lists).
+5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (replaces the retired per-flow ECMP load balancer; set `CLARO_MACS`/`VIVO_MACS` to your lock lists).
 6. Configure SQM via `scripts/configure-sqm.sh`.
 7. Bootstrap AdGuard filter lists via `scripts/configure-adguard-filters.sh`.
 8. Point DNS at ISP resolvers via `scripts/configure-isp-dns.sh` and fix tracker ICMP false-down via `scripts/configure-omr-tracker.sh`.
