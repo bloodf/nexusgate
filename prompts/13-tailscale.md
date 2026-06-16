@@ -1,4 +1,4 @@
-# 14 Tailscale
+# 13 Tailscale
 
 ## Goal
 
@@ -48,7 +48,7 @@ opkg remove tailscale
 - `--accept-dns=false`: keep AdGuard as LAN DNS. Tailscale MagicDNS off.
 - `--ssh`: tailnet identity auth, no SSH key mgmt.
 - No subnet route by default. Tailscale does NOT touch LAN routing tables, NOT an exit node, NOT advertising LAN.
-- ECMP load balancing unaffected — egress from router uses main-table default, independent of tailscale0.
+- WAN affinity routing unaffected — egress from router uses main-table default, independent of tailscale0.
 
 ## Opt-in: subnet routing (only if you really need it)
 

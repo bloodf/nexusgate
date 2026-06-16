@@ -1,4 +1,4 @@
-# 12 AdGuard Home
+# 10 AdGuard Home
 
 ## Goal
 LAN-wide DNS filtering without breaking LuCI, SSH, OMR, DHCP, or DNS-based bypass logic.

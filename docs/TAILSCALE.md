@@ -56,7 +56,7 @@ Home router AP/bridge mode -> client on `br-lan` (192.168.100.0/24) -> directly 
 
 ### WAN egress (browsing, downloads)
 
-LAN client -> br-lan -> `ip rule iif br-lan lookup 991337` -> ECMP nexthop (L4 hash) -> pppoe-wan1 or eth2/wan2 -> Internet. Unchanged by Tailscale.
+LAN client -> br-lan -> `ip rule pri 45 iif br-lan lookup 100` (or pri 40/41 if MAC-locked) -> single nexthop -> pppoe-wan1 or eth2/wan2 -> Internet. Unchanged by Tailscale.
 
 ### Tailnet ingress (admin from anywhere)
 
@@ -66,9 +66,9 @@ Remote device on tailnet -> WireGuard UDP to nexusgate's tailnet IP (100.x.y.z) 
 
 Remote device with `tailscale up --accept-routes` -> WireGuard to nexusgate -> nexusgate forwards into br-lan -> reaches `192.168.100.50` etc. as if on LAN.
 
-### Tailnet egress (router as exit node — optional, not enabled by default)
+### Tailnet egress (router as exit node - optional, not enabled by default)
 
-Add `--advertise-exit-node` to make NexusGate an exit node. Peer enables `--exit-node=nexusgate` to route all its traffic via NexusGate's WANs (and ECMP).
+Add `--advertise-exit-node` to make NexusGate an exit node. Peer enables `--exit-node=nexusgate` to route all its traffic via NexusGate's WANs (main-table default; not subject to LAN affinity rules).
 
 ## Port matrix after Tailscale
 
@@ -90,10 +90,13 @@ Add `--advertise-exit-node` to make NexusGate an exit node. Peer enables `--exit
 | main | kernel | Default for router-originated traffic, tailnet egress |
 | 6 | OMR | wan1 (pppoe-wan1) default |
 | 10 | OMR | wan2 (eth2) default |
-| 991337 | OMR + ECMP hook | Balanced multipath for `iif br-lan` |
+| 100 | affinity | WAN1 single-nexthop (WAN1-locked + LAN default) |
+| 101 | affinity | WAN2 single-nexthop (WAN2-locked devices) |
 | 52 | tailscaled | Tailscale subnet routes / exit node policy |
 
-`tailscale0` and table 52 are isolated from ECMP — tailnet traffic does not get hashed across WANs (would break WireGuard session). Router uses main-table default for its own tailnet keepalives.
+`tailscale0` and table 52 are isolated from the affinity rules - tailnet traffic uses
+the main-table default (not tables 100/101) and does not get split across WANs (would
+break WireGuard sessions). Router uses main-table default for its own tailnet keepalives.
 
 ## Verification
 

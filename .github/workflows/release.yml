@@ -1,15 +1,23 @@
 name: Release
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v1.2.3)'
+        required: false
+        default: ''
 jobs:
   archive:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build release archive
-        run: tar --exclude=.git -czf nexusgate-${GITHUB_REF_NAME}.tgz .
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="${{ github.ref_name }}"; fi
+          tar --exclude=.git -czf "nexusgate-${VERSION}.tgz" .
+          echo "ARCHIVE_NAME=nexusgate-${VERSION}" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
-          name: nexusgate-${{ github.ref_name }}
-          path: nexusgate-${{ github.ref_name }}.tgz
+          name: ${{ env.ARCHIVE_NAME }}
+          path: nexusgate-*.tgz

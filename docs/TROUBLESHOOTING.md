@@ -63,7 +63,7 @@ removes any legacy pri-50 → 100 rule). It re-asserts every omr-tracker tick.
 ## mwan3 won't install
 
 OMR is nftables-only; `luci-app-mwan3` depends on `iptables-mod-conntrack-extra` which is not in OMR repos.
-Fix: don't use mwan3. Use kernel ECMP via OMR table 991337 (`scripts/configure-load-balancing.sh` + `scripts/ecmp-balance.sh` post-tracking hook).
+Fix: don't use mwan3. NexusGate uses per-device WAN affinity (kernel ip rules + nft marking) instead - applied by `scripts/configure-wan-affinity.sh`.
 
 ## Single LAN client always shows one WAN public IP
 
@@ -72,24 +72,28 @@ device has one stable public IP. (Under the old ECMP model this was a symptom of
 L3 hashing; it is no longer a problem.) Only investigate if the IP is the *wrong*
 WAN for that device — see "Which WAN is a device on?" above.
 
-## Table 991337 has only one nexthop (or empty)
+## Table 991337 has only one nexthop (or empty) (historical)
+
+> **Historical note.** Table `991337` was the ECMP load-balancer table used before per-device
+> affinity. It is OMR-internal and still rebuilt by OMR core each tracker tick, but the
+> affinity `pri 45 iif br-lan` rule permanently shadows it - LAN traffic never reaches it.
+> Do NOT add a `pri 50 iif br-lan lookup 991337` rule and do NOT install `099-ecmp-balance`.
+> Both are remnants of the retired ECMP model.
+
+If you see a stale `pri 50 iif br-lan lookup 991337` rule (left over from a previous install):
 
 ```sh
-ip route show table 991337
+ip rule del priority 50
 ```
 
-Cause: `099-ecmp-balance` post-tracking hook missing, not executable, or one of tables 6/10 has no default route.
-Fix:
+Then verify the affinity rules are in place:
 
-- Verify hook: `ls -l /usr/share/omr/post-tracking.d/099-ecmp-balance` (must be `+x`).
-- Verify per-WAN tables: `ip route show table 6`, `ip route show table 10` — both need a default.
-- If table empty, the WAN isn't really up (`ifstatus wan1`, check pppoe/dhcp lease).
-- Run hook manually: `/usr/share/omr/post-tracking.d/099-ecmp-balance`.
+```sh
+ip rule show | grep "iif br-lan"
+# Expect: pri 45 iif br-lan lookup 100
+```
 
-## LAN traffic ignores 991337
-
-`ip rule show | grep 991337` returns nothing.
-Fix: `ip rule add priority 50 iif br-lan lookup 991337`. Persist in `/etc/rc.local`.
+If missing, re-run `098-wan-affinity` (see "ip rule pri 45 missing" above).
 
 ## ubus wan1/wan2 route arrays empty
 
@@ -120,8 +124,9 @@ Symptoms: intermittent drops, `openmptcprouter.wan2.state=down`, table 10 shows
 a stale or incorrect default route on `eth2`.
 
 Cause: default omr-tracker pings 1.1.1.1 / 8.8.8.8. Some ISPs block ICMP upstream.
-Tracker marks wan2 DOWN → OMR installs broken down-state routes → ECMP still
-hashes ~50% of flows to dead path.
+Tracker marks wan2 DOWN -> OMR installs broken down-state routes -> `098-wan-affinity`
+reads the DOWN state and repoints WAN2-locked devices to WAN1 (failover), but WAN2 appears
+permanently down to OMR even though the link is physically up.
 
 Fix:
 
