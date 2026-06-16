@@ -1,4 +1,0 @@
-config rule
-	option name 'Streaming domains'
-	option domains 'netflix.com youtube.com googlevideo.com hulu.com disneyplus.com primevideo.com'
-	option interface 'mwan3'

@@ -1,4 +1,4 @@
-# 12 AdGuard Home
+# 10 AdGuard Home
 
 ## Goal
 LAN-wide DNS filtering without breaking LuCI, SSH, OMR, DHCP, or DNS-based bypass logic.
@@ -7,11 +7,11 @@ LAN-wide DNS filtering without breaking LuCI, SSH, OMR, DHCP, or DNS-based bypas
 
 | Service | Bind | Port | URL |
 |---|---:|---:|---|
-| LuCI HTTP | LAN/all | 80 | `http://192.168.100.1` |
-| LuCI HTTPS | LAN/all | 443 | `https://192.168.100.1` |
-| SSH | LAN | 22 | `ssh root@192.168.100.1` |
-| AdGuard Home UI | LAN | 3000 | `http://192.168.100.1:3000` |
-| Client DNS | LAN | 53 | `192.168.100.1` |
+| LuCI HTTP | LAN/all | 80 | `http://10.25.0.1` |
+| LuCI HTTPS | LAN/all | 443 | `https://10.25.0.1` |
+| SSH | LAN | 22 | `ssh root@10.25.0.1` |
+| AdGuard Home UI | LAN | 3000 | `http://10.25.0.1:3000` |
+| Client DNS | LAN | 53 | `10.25.0.1` |
 | AdGuard DNS backend | localhost | 5354 | `127.0.0.1#5354` |
 | OMR admin API | internal/admin | 65500 | internal/admin only |
 
@@ -37,10 +37,10 @@ Preserves DHCP, local hostnames, OMR ipsets, OMR bypass behavior.
 
 ## Verification
 
-- LuCI still reachable at `http://192.168.100.1`.
-- AdGuard Home reachable at `http://192.168.100.1:3000`.
-- `dig @192.168.100.1 doubleclick.net +short` → `0.0.0.0` or NXDOMAIN (blocked).
-- `dig @192.168.100.1 example.com +short` → real IP (resolves).
+- LuCI still reachable at `http://10.25.0.1`.
+- AdGuard Home reachable at `http://10.25.0.1:3000`.
+- `dig @10.25.0.1 doubleclick.net +short` → `0.0.0.0` or NXDOMAIN (blocked).
+- `dig @10.25.0.1 example.com +short` → real IP (resolves).
 - Internet works from router and LAN clients.
 - OMR services remain enabled.
 

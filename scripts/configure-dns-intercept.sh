@@ -13,7 +13,7 @@
 
 set -eu
 
-ROUTER_IP=${ROUTER_IP:-192.168.100.1}
+ROUTER_IP=${ROUTER_IP:-10.25.0.1}
 TAILSCALE_DNS=${TAILSCALE_DNS:-100.100.100.100}
 
 for proto in udp tcp; do

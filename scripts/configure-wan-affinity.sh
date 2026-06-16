@@ -23,7 +23,7 @@
 #   /usr/lib/wan-affinity/apply-affinity.sh  lists -> nft + routing (live)
 #   /usr/lib/wan-affinity/oui.db             offline OUI vendor lookup database
 #   /usr/share/omr/post-tracking.d/098-wan-affinity   failover hook
-#   /www/cgi-bin/wan-affinity                web UI (http://192.168.100.1/cgi-bin/wan-affinity)
+#   /www/cgi-bin/wan-affinity                web UI (http://10.25.0.1/cgi-bin/wan-affinity)
 #
 # Idempotent. Backs up replaced files. Re-run after OMR package upgrades.
 #
@@ -110,6 +110,48 @@ for f in "$PT_DIR"/099-ecmp-balance.bak-*; do
 	[ -f "$f" ] && rm -f "$f"
 done
 
+# ---- 3a. Idempotent ECMP teardown -------------------------------------------
+# WHY: if 099-ecmp-balance and 098-wan-affinity are both live simultaneously,
+# 099 re-adds pri-50->table 991337 on every tracker tick while 098 adds
+# pri-45->table 100. This produces per-tick rule churn and races the routing
+# state, causing device flapping and unstable WAN assignment. Tearing down the
+# ECMP regime here ensures each fresh install converges to the single-nexthop
+# affinity model with no lingering interference.
+
+# Step 1: remove 099-ecmp-balance line from rc.local if present
+if [ -f /etc/rc.local ] && grep -q '099-ecmp-balance' /etc/rc.local 2>/dev/null; then
+	sed -i '/099-ecmp-balance/d' /etc/rc.local
+fi
+
+# Step 2: switch OMR master away from 'balancing'.
+# NOTE: confirm the valid enum for your OMR build; 'failover' is the standard
+# non-balancing multi-WAN value in OpenMPTCProuter.
+if [ "$(uci -q get openmptcprouter.settings.master 2>/dev/null || echo '')" = "balancing" ]; then
+	uci -q set openmptcprouter.settings.master='failover'
+	uci -q commit openmptcprouter
+fi
+
+# Step 3: remove the ECMP sysctl drop-in
+[ -f /etc/sysctl.d/99-ecmp.conf ] && rm -f /etc/sysctl.d/99-ecmp.conf
+
+# Step 4: flush the retired balanced routing table
+ip route flush table 991337 2>/dev/null || true
+
+# Step 5: delete the retired pri-50 ECMP policy rule (bounded loop, cap 16,
+# matches style of 098-wan-affinity pri-50->100 cleanup)
+_i=0
+while ip rule show | grep -qE "^50:[[:space:]].*iif br-lan lookup 991337" && [ "$_i" -lt 16 ]; do
+	ip rule del priority 50 iif br-lan lookup 991337 2>/dev/null
+	_i=$((_i + 1))
+done
+
+# Step 6: force per-WAN multipath off (MPTCP/bonding retired; affinity uses
+# single-nexthop tables 100/101). multipath='on'/'master' thrashed the PPPoE
+# master and flapped Vivo - see configure-wan-pppoe.sh for the same setting.
+uci -q set network.wan1.multipath='off'
+uci -q set network.wan2.multipath='off'
+uci -q commit network
+
 # ---- 3b. Enable conntrack byte accounting -----------------------------------
 # Per-device live up/down rates in the web UI read byte counters from
 # /proc/net/nf_conntrack. Those counters are zero unless nf_conntrack_acct is on.
@@ -142,6 +184,6 @@ echo
 echo "== table 100 (WAN1 default) =="; ip route show table 100
 echo "== table 101 (WAN2) =="; ip route show table 101
 echo
-echo "Web UI: http://192.168.100.1/cgi-bin/wan-affinity"
+echo "Web UI: http://10.25.0.1/cgi-bin/wan-affinity"
 echo "Done. Verify a WAN2 device shows the WAN2 public IP and a default device"
 echo "shows the WAN1 public IP, both stable across repeated calls."

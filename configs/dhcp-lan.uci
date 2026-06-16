@@ -1,24 +1,27 @@
+# Authoritative LAN DHCP config (single source of truth). Apply per prompts/03-nic-assignment.md. The LAN bridge itself is set by scripts/configure-lan-eth3.sh.
+# Pool starts at 10.25.1.1 (~4096 leases). 10.25.0.0/24 reserved for router (10.25.0.1) + static/infra reservations.
 config dhcp 'lan'
 	option interface 'lan'
-	option start '50'
-	option limit '200'
+	option start '256'
+	option limit '4096'
 	option leasetime '12h'
 	option ignore '0'
 	option dhcpv4 'server'
 	option dhcpv6 'server'
 	option ra 'server'
-	option ra_management '1'
+	option ra_slaac '1'
+	option ra_management '0'
 	option ra_default '1'
-	list dhcp_option '6,192.168.100.1'
+	list dhcp_option '6,10.25.0.1'
 
 # Static reservations.
-# Range 2-49 reserved for infra (router .1, CortexOS .10, future fixed services).
-# Pool is 50-249. Wi-Fi clients via Decos (AP mode) and wired hosts go in pool.
+# 10.25.0.0/24 reserved for infra (router 10.25.0.1, CortexOS 10.25.0.10, future fixed services).
+# Dynamic pool begins at 10.25.1.1 (start=256). Wi-Fi clients via Decos (AP mode) and wired hosts go in pool.
 
 config host
 	option name 'cortexos'
 	option mac '40:9c:a7:49:4b:62'
-	option ip '192.168.100.10'
+	option ip '10.25.0.10'
 
 # Decos (5x BE65 in AP mode) intentionally NOT reserved — dynamic addresses are fine,
 # they manage themselves through the Deco mesh and we don't manage them by IP.

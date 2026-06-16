@@ -4,7 +4,7 @@
 Bring up WAN1 (primary, e.g. PPPoE/fiber) and WAN2 (secondary, e.g. DHCP/cable).
 
 ## Inputs
-- Router IP: `192.168.100.1`
+- Router IP: `10.25.0.1`
 - WAN roles: eth1 → wan1 (primary PPPoE or DHCP), eth2 → wan2 (secondary DHCP)
 - LAN: eth0 + eth3 bridged → `br-lan`
 - WAN1 PPPoE credentials: `<pppoe-username>` / `<pppoe-password>` (obtain from your ISP; see [Reference deployment in README](../README.md#reference-deployment) for example values).

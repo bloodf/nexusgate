@@ -16,8 +16,8 @@ Map physical ports to NexusGate roles.
 | Switch port | Device | Notes |
 |---:|---|---|
 | 1 | TP-Link Deco BE65 main | AP mode; mesh of 5 Decos joins NexusGate LAN flat |
-| 2 | CortexOS local VPS | DHCP, reserved to `192.168.100.10` |
-| 3 | WD NAS | Firmware-configured static `192.168.100.187` |
+| 2 | CortexOS local VPS | DHCP, reserved to `10.25.0.10` |
+| 3 | WD NAS | Firmware-configured static `10.25.0.187` |
 
 Deco mesh is in **AP mode**: NexusGate is sole gateway/DHCP/DNS for all Wi-Fi clients. Decos themselves take dynamic leases (not reserved by design — mesh handles its own membership).
 
@@ -37,9 +37,9 @@ Deco mesh is in **AP mode**: NexusGate is sole gateway/DHCP/DNS for all Wi-Fi cl
 ## Verification
 
 - `br-lan` includes `eth0` and `eth3`.
-- DHCP active on LAN; clients receive `192.168.100.50-249` leases.
+- DHCP active on LAN; clients receive `10.25.1.1+` leases (~60000 pool).
 - All 5 Decos appear in `/tmp/dhcp.leases` (MAC prefix `bc:07:1d`).
-- CortexOS lands on `192.168.100.10` (resolvable as `cortexos.lan`).
+- CortexOS lands on `10.25.0.10` (resolvable as `cortexos.lan`).
 - `tc qdisc show | grep cake` lists 4 cake qdiscs (ingress+egress per WAN).
-- From a Wi-Fi client: `dig @192.168.100.1 doubleclick.net +short` → `0.0.0.0`.
+- From a Wi-Fi client: `dig @10.25.0.1 doubleclick.net +short` → `0.0.0.0`.
 - Bufferbloat test from any Wi-Fi client → A or A+ under load.

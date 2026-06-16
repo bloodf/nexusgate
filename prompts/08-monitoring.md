@@ -1,11 +1,11 @@
-# 07 Sqm Cake
+# 08 Monitoring
 
 ## Goal
-Execute NexusGate step `sqm-cake` safely on OpenMPTCProuter.
+Execute NexusGate step `monitoring` safely on OpenMPTCProuter.
 
 ## Inputs
-- Router IP: `192.168.100.1` unless changed
-- WAN roles: eth0=wan1, eth1=wan2, eth2=br-lan, eth3=mgmt, wwan0=wan3
+- Router IP: `10.25.0.1` unless changed
+- WAN roles: eth1=wan1 (primary), eth2=wan2 (secondary); eth0+eth3 bridged to br-lan
 
 ## Actions
 1. Review prerequisites.

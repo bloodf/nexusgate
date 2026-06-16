@@ -17,8 +17,10 @@ config device 'br_lan'
 config interface 'lan'
 	option device 'br-lan'
 	option proto 'static'
-	option ipaddr '192.168.100.1'
-	option netmask '255.255.255.0'
+	option ipaddr '10.25.0.1'
+	option netmask '255.255.0.0'
+	# Internal IPv6: ULA only (fd::/8), served to LAN via SLAAC+DHCPv6. No WAN/ISP IPv6 - internet stays IPv4 (per-device affinity is v4-only).
+	option ip6assign '60'
 
 # Fiber WAN. Vivo Fibra uses generic OLT-authenticated PPPoE; real auth happens
 # at the OLT via ONT serial number, so "cliente@cliente" / "cliente" works for
@@ -27,6 +29,10 @@ config interface 'lan'
 # If the GPON ONT is in ROUTER mode instead, it terminates PPPoE itself and
 # hands eth1 a private DHCP lease. In that case override proto to 'dhcp' and
 # accept the double-NAT (see prompts/04-wan-config.md ONT detection flow).
+#
+# multipath 'off': MPTCP/VPS bonding retired. Routing uses per-device affinity
+# via single-nexthop tables 100/101. multipath 'master'/'on' thrashed the PPPoE
+# master and flapped Vivo (see scripts/configure-wan-pppoe.sh:48-52).
 config interface 'wan1'
 	option device 'eth1'
 	option proto 'pppoe'
@@ -36,14 +42,13 @@ config interface 'wan1'
 	option defaultroute '0'
 	option peerdns '0'
 	option metric '10'
-	option multipath 'on'
+	option multipath 'off'
 
-# Coax WAN. Cable modem stays in router mode for v1 (private DHCP lease, double
-# NAT). Per-flow ECMP still works; revisit modem bridge mode for full perf.
+# Coax WAN. Cable modem in router mode (private DHCP lease, double NAT acceptable for v1).
 config interface 'wan2'
 	option device 'eth2'
 	option proto 'dhcp'
 	option defaultroute '0'
 	option peerdns '0'
 	option metric '20'
-	option multipath 'on'
+	option multipath 'off'

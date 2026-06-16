@@ -7,10 +7,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Syntax check shell scripts
         run: |
-          for f in scripts/*.sh vps/*.sh vps/tests/*.sh; do sh -n "$f"; done
+          for f in \
+            scripts/*.sh \
+            scripts/wan-affinity/apply-affinity.sh \
+            scripts/wan-affinity/098-wan-affinity \
+            scripts/wan-affinity/wan-affinity.cgi; do
+            sh -n "$f"
+          done
+      - name: Shellcheck
+        run: |
+          shellcheck --version
+          shellcheck -s sh --severity=warning \
+            scripts/*.sh \
+            scripts/wan-affinity/apply-affinity.sh \
+            scripts/wan-affinity/098-wan-affinity \
+            scripts/wan-affinity/wan-affinity.cgi
       - name: Verify required assets
         run: |
           test -f README.md
-          test -f scripts/configure-load-balancing.sh
           test -f scripts/install-luci-addons.sh
+          test -f scripts/configure-wan-affinity.sh
           test -f configs/network-nics.uci
+          test -f scripts/wan-affinity/apply-affinity.sh
+          test -f scripts/wan-affinity/098-wan-affinity

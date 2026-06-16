@@ -23,13 +23,13 @@ credentials, and addresses.
 - **WAN1 (primary) is the default WAN**; a MAC lock list routes chosen devices
   (mostly streaming) over **WAN2 (secondary/fallback)**.
 - Both WANs active simultaneously across devices; a single device is capped at one
-  link (~1Gb) — 2Gb single-flow needs MPTCP+VPS bonding (out of scope).
+  link (~1Gb) - 2Gb single-flow needs MPTCP+VPS bonding (out of scope; no VPS
+  endpoint configured).
 - Automatic failover + shift-back per WAN (post-tracking hook `098-wan-affinity`).
 - SQM/CAKE: low latency under load.
 
 > Earlier releases used per-flow ECMP (L4 hash), which split one device across two
-> public IPs and broke streaming/gaming. That model is retired
-> (`scripts/ecmp-balance.sh` kept for history only).
+> public IPs and broke streaming/gaming. That model is retired and removed.
 
 ## Ports / physical cabling
 
@@ -48,32 +48,32 @@ No wwan0 / 4G in v1 deployment.
 
 Recommended Wi-Fi router mode:
 
-- Best: Access Point / bridge mode, DHCP off. Clients land directly on `192.168.100.0/24` and can reach NexusGate at `192.168.100.1` for LuCI/SSH — no need to plug into `eth0`.
+- Best: Access Point / bridge mode, DHCP off. Clients land directly on `10.25.0.0/16` and can reach NexusGate at `10.25.0.1` for LuCI/SSH — no need to plug into `eth0`.
 - OK: Router mode, WAN via DHCP from NexusGate on `eth3`. Clients sit behind a second NAT; to admin NexusGate from those clients, either switch the home router to AP mode or use Tailscale (see below).
 
 ## Remote admin
 
-- **From home Wi-Fi (no eth0 plug)**: put home router in AP/bridge mode and hit `http://192.168.100.1` from any Wi-Fi client.
-- **From anywhere (over Internet)**: enable Tailscale via `scripts/configure-tailscale.sh`. Router joins tailnet, advertises `192.168.100.0/24`, exposes SSH+LuCI on its tailnet IP. See `prompts/14-tailscale.md`.
+- **From home Wi-Fi (no eth0 plug)**: put home router in AP/bridge mode and hit `http://10.25.0.1` from any Wi-Fi client.
+- **From anywhere (over Internet)**: enable Tailscale via `scripts/configure-tailscale.sh`. Router joins tailnet, advertises `10.25.0.0/16`, exposes SSH+LuCI on its tailnet IP. See `prompts/13-tailscale.md`.
 
 ## Web UI access
 
 OpenMPTCProuter/OpenWrt already includes LuCI web UI.
 
 ```text
-http://192.168.100.1
-https://192.168.100.1
+http://10.25.0.1
+https://10.25.0.1
 ```
 
 Default service ports on router:
 
 | Service | Port | URL / bind |
 |---|---:|---|
-| LuCI HTTP | 80 | `http://192.168.100.1` |
-| LuCI HTTPS | 443 | `https://192.168.100.1` |
-| SSH | 22 | `ssh root@192.168.100.1` |
-| Client DNS (dnsmasq) | 53 | `192.168.100.1` LAN DNS/DHCP frontend |
-| AdGuard Home UI | 3000 | `http://192.168.100.1:3000` |
+| LuCI HTTP | 80 | `http://10.25.0.1` |
+| LuCI HTTPS | 443 | `https://10.25.0.1` |
+| SSH | 22 | `ssh root@10.25.0.1` |
+| Client DNS (dnsmasq) | 53 | `10.25.0.1` LAN DNS/DHCP frontend |
+| AdGuard Home UI | 3000 | `http://10.25.0.1:3000` |
 | AdGuard Home DNS backend | 5354 | `127.0.0.1#5354` internal only |
 | OMR admin API | 65500 | internal/admin only |
 
@@ -105,17 +105,17 @@ A single device is capped at one WAN link (~1Gb). Splitting one flow across two 
 2. Install LuCI addons via `scripts/install-luci-addons.sh`.
 3. Configure LAN bridge (eth0+eth3) via `scripts/configure-lan-eth3.sh`.
 4. Configure WAN1 PPPoE via `scripts/configure-wan-pppoe.sh` and WAN2 DHCP.
-5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (retires the old `ecmp-balance.sh` load balancer; set `WAN2_MACS`/`WAN1_MACS` to your lock lists).
+5. Configure per-device WAN affinity via `sh scripts/configure-wan-affinity.sh` (replaces the retired per-flow ECMP load balancer; set `CLARO_MACS`/`VIVO_MACS` to your lock lists).
 6. Configure SQM via `scripts/configure-sqm.sh`.
 7. Bootstrap AdGuard filter lists via `scripts/configure-adguard-filters.sh`.
 8. Point DNS at ISP resolvers via `scripts/configure-isp-dns.sh` and fix tracker ICMP false-down via `scripts/configure-omr-tracker.sh`.
-9. (Optional) Enable remote admin via `scripts/configure-tailscale.sh` — see `prompts/14-tailscale.md`.
+9. (Optional) Enable remote admin via `scripts/configure-tailscale.sh` — see `prompts/13-tailscale.md`.
 
 ## Modes
 
 - **Per-device WAN affinity (default)**: nft MAC marking + single-nexthop tables 100/101 + `098-wan-affinity` failover hook. One device = one WAN = one stable public IP.
 - **Device/App Policy Routing**: optional overrides via OMR bypass / fwmark rules (roadmap).
-- **Advanced multipath**: MPTCP/OMR endpoint support for single-flow >1Gb scenarios.
+- **Advanced multipath**: MPTCP+VPS bonding for single-flow >1Gb - out of scope; no VPS endpoint configured in this deployment.
 
 See `ARCHITECTURE.md` for full data-flow diagram and `docs/TAILSCALE.md` for remote-access details.
 
