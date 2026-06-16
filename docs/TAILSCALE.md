@@ -5,7 +5,7 @@ Remote SSH/LuCI ingress to NexusGate from anywhere. **SSH-only by default** — 
 ## Install + first login (SSH-only, default)
 
 ```sh
-ssh root@192.168.100.1
+ssh root@10.25.0.1
 opkg update
 opkg install tailscale
 /etc/init.d/tailscale enable
@@ -36,23 +36,23 @@ If subnet routing was enabled previously and you want pure SSH-only:
 tailscale up --hostname=nexusgate --accept-dns=false --ssh --reset
 ```
 
-`--reset` drops `--advertise-routes` and any prior flags. Then revoke the previously approved `192.168.100.0/24` route in the admin console.
+`--reset` drops `--advertise-routes` and any prior flags. Then revoke the previously approved `10.25.0.0/16` route in the admin console.
 
 ## Opt-in: subnet routing
 
-Only needed if tailnet peers must reach LAN clients (`192.168.100.x`) over tunnel.
+Only needed if tailnet peers must reach LAN clients (`10.25.x.y`) over tunnel.
 
 ```sh
 SUBNET=1 TS_AUTHKEY=tskey-auth-xxxx scripts/configure-tailscale.sh
 ```
 
-Then admin console: Machines -> `nexusgate` -> Edit route settings -> approve `192.168.100.0/24`. Peer: `tailscale up --accept-routes`.
+Then admin console: Machines -> `nexusgate` -> Edit route settings -> approve `10.25.0.0/16`. Peer: `tailscale up --accept-routes`.
 
 ## How traffic flows now
 
 ### LAN ingress (admin from home Wi-Fi)
 
-Home router AP/bridge mode -> client on `br-lan` (192.168.100.0/24) -> directly hits `192.168.100.1`. No Tailscale needed locally.
+Home router AP/bridge mode -> client on `br-lan` (10.25.0.0/16) -> directly hits `10.25.0.1`. No Tailscale needed locally.
 
 ### WAN egress (browsing, downloads)
 
@@ -64,7 +64,7 @@ Remote device on tailnet -> WireGuard UDP to nexusgate's tailnet IP (100.x.y.z) 
 
 ### Tailnet -> LAN clients
 
-Remote device with `tailscale up --accept-routes` -> WireGuard to nexusgate -> nexusgate forwards into br-lan -> reaches `192.168.100.50` etc. as if on LAN.
+Remote device with `tailscale up --accept-routes` -> WireGuard to nexusgate -> nexusgate forwards into br-lan -> reaches `10.25.0.50` etc. as if on LAN.
 
 ### Tailnet egress (router as exit node - optional, not enabled by default)
 
@@ -108,7 +108,7 @@ tailscale ip -4
 # From remote tailnet device:
 ssh root@<100.x.y.z>          # Tailscale SSH (identity auth)
 curl http://<100.x.y.z>       # LuCI
-ping 192.168.100.50           # LAN client via advertised subnet route
+ping 10.25.0.50           # LAN client via advertised subnet route
 ```
 
 ## Rollback
@@ -122,5 +122,5 @@ opkg remove tailscale
 ## Notes
 
 - UDP GRO warning on first `tailscale up` (`See https://tailscale.com/s/ethtool-config-udp-gro`) — cosmetic perf tuning, safe to ignore for v1.
-- Tailscale subnet route conflicts with LAN: only one node should advertise `192.168.100.0/24`. Do not enable subnet routing on multiple gateways.
+- Tailscale subnet route conflicts with LAN: only one node should advertise `10.25.0.0/16`. Do not enable subnet routing on multiple gateways.
 - Tailscale keys: rotate via admin console. Router stays online via `tailscaled` state under `/var/lib/tailscale/`.

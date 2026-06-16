@@ -17,7 +17,7 @@ nft list chain inet fw4 wan_affinity
 # Routing decision for a device by MAC's mark, or for default LAN:
 ip route get 1.1.1.1 mark 0x10000          # WAN1-locked  -> table 100 / pppoe-wan1
 ip route get 1.1.1.1 mark 0x20000          # WAN2-locked -> table 101 / eth2
-ip route get 1.1.1.1 from 192.168.100.50 iif br-lan   # default LAN -> table 100
+ip route get 1.1.1.1 from 10.25.0.50 iif br-lan   # default LAN -> table 100
 
 # Current device list (IP / MAC / hostname):
 cat /tmp/dhcp.leases
@@ -105,7 +105,7 @@ Expected: OMR sets `defaultroute=0` on WANs. Don't use ubus for route discovery;
 
 ## AdGuard not blocking ads
 
-`dig @192.168.100.1 doubleclick.net +short` returns a real IP.
+`dig @10.25.0.1 doubleclick.net +short` returns a real IP.
 Cause: `/etc/adguardhome.yaml` has no `filters:` entries.
 Fix: `scripts/configure-adguard-filters.sh` injects 4 AdGuard filter URLs (ids 1, 2, 11, 15) and restarts service.
 

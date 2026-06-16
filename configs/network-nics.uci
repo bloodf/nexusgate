@@ -17,8 +17,10 @@ config device 'br_lan'
 config interface 'lan'
 	option device 'br-lan'
 	option proto 'static'
-	option ipaddr '192.168.100.1'
-	option netmask '255.255.255.0'
+	option ipaddr '10.25.0.1'
+	option netmask '255.255.0.0'
+	# Internal IPv6: ULA only (fd::/8), served to LAN via SLAAC+DHCPv6. No WAN/ISP IPv6 - internet stays IPv4 (per-device affinity is v4-only).
+	option ip6assign '60'
 
 # Fiber WAN. Vivo Fibra uses generic OLT-authenticated PPPoE; real auth happens
 # at the OLT via ONT serial number, so "cliente@cliente" / "cliente" works for

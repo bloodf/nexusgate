@@ -6,7 +6,7 @@ Pin each LAN device to a single WAN (stable per-device public IP) and enable aut
 Default devices egress via WAN1 (primary). Devices whose MAC is in the Claro lock list egress via WAN2 (secondary). Each device always has exactly one stable public IP - no alternation, no load-balancing.
 
 ## Inputs
-- Router IP: `192.168.100.1`
+- Router IP: `10.25.0.1`
 - WAN roles: eth1=wan1 (primary), eth2=wan2 (secondary); eth0+eth3 bridged to br-lan
 - Optional: `CLARO_MACS` and `VIVO_MACS` environment variables (space-separated MAC addresses) to pre-seed the lock lists on first install. If not set, defaults are used and the lock lists can be managed via the web UI after install.
 
@@ -44,14 +44,14 @@ Default devices egress via WAN1 (primary). Devices whose MAC is in the Claro loc
    ```
 
 5. Open the web UI to verify lock lists and current WAN assignments:
-   `http://192.168.100.1/cgi-bin/wan-affinity`
+   `http://10.25.0.1/cgi-bin/wan-affinity`
 
 ## Checkpoint
 
 - From a default LAN device: `curl -s https://api.ipify.org` repeated 5 times returns the SAME WAN1 public IP every time.
 - From a Claro-locked device: repeated `curl -s https://api.ipify.org` returns the SAME WAN2 public IP every time.
 - Unplug WAN1: default devices shift to WAN2 IP (one stable IP, not the same as before). Re-plug WAN1: after the next tracker tick, default devices shift back to the WAN1 IP.
-- Web UI accessible at `http://192.168.100.1/cgi-bin/wan-affinity`.
+- Web UI accessible at `http://10.25.0.1/cgi-bin/wan-affinity`.
 
 ## Rollback
 Restore `/etc/config/*` backups and remove `/usr/share/omr/post-tracking.d/098-wan-affinity`; reboot.

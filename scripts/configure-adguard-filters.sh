@@ -48,6 +48,6 @@ echo "Backup: $BAK"
 sleep 3
 
 echo "Verify blocking:"
-dig @192.168.100.1 doubleclick.net +short || true
+dig @10.25.0.1 doubleclick.net +short || true
 echo "Verify resolution:"
-dig @192.168.100.1 example.com +short || true
+dig @10.25.0.1 example.com +short || true

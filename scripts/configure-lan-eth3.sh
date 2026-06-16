@@ -3,11 +3,12 @@ set -eu
 
 # Wiring: eth0 = LAN/management (admin PC), eth3 = LAN downlink to home Wi-Fi router.
 # Both bridged into br-lan.
-# DHCP is owned solely by configs/dhcp-lan.uci (the single source of truth: pool 50-249,
-# DNS push, CortexOS reservation); this script sets up only the eth0+eth3 LAN bridge.
+# DHCP is owned solely by configs/dhcp-lan.uci (the single source of truth: /16 pool
+# starting at 10.25.1.1, ~4096 leases, DNS push, CortexOS reservation); this script sets
+# up only the eth0+eth3 LAN bridge.
 
-LAN_IP=${LAN_IP:-192.168.100.1}
-LAN_NETMASK=${LAN_NETMASK:-255.255.255.0}
+LAN_IP=${LAN_IP:-10.25.0.1}
+LAN_NETMASK=${LAN_NETMASK:-255.255.0.0}
 
 uci batch <<EOF
 # Bridge eth0 + eth3 as LAN. eth3 is the home Wi-Fi router uplink.

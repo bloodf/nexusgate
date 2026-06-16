@@ -23,7 +23,7 @@
 #   /usr/lib/wan-affinity/apply-affinity.sh  lists -> nft + routing (live)
 #   /usr/lib/wan-affinity/oui.db             offline OUI vendor lookup database
 #   /usr/share/omr/post-tracking.d/098-wan-affinity   failover hook
-#   /www/cgi-bin/wan-affinity                web UI (http://192.168.100.1/cgi-bin/wan-affinity)
+#   /www/cgi-bin/wan-affinity                web UI (http://10.25.0.1/cgi-bin/wan-affinity)
 #
 # Idempotent. Backs up replaced files. Re-run after OMR package upgrades.
 #
@@ -184,6 +184,6 @@ echo
 echo "== table 100 (WAN1 default) =="; ip route show table 100
 echo "== table 101 (WAN2) =="; ip route show table 101
 echo
-echo "Web UI: http://192.168.100.1/cgi-bin/wan-affinity"
+echo "Web UI: http://10.25.0.1/cgi-bin/wan-affinity"
 echo "Done. Verify a WAN2 device shows the WAN2 public IP and a default device"
 echo "shows the WAN1 public IP, both stable across repeated calls."

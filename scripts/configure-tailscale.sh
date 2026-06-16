@@ -27,7 +27,7 @@ opkg install tailscale
 
 UP_ARGS="--hostname=$HOSTNAME --accept-dns=false --ssh --reset"
 if [ "$SUBNET" = "1" ]; then
-	ROUTES=${ADVERTISE_ROUTES:-192.168.100.0/24}
+	ROUTES=${ADVERTISE_ROUTES:-10.25.0.0/16}
 	UP_ARGS="$UP_ARGS --advertise-routes=$ROUTES"
 fi
 

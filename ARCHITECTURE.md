@@ -19,13 +19,13 @@ device across two public IPs breaks TLS session resume, QUIC migration, and anti
 - `eth3` - LAN downlink to home Wi-Fi router; bridged with eth0
 - No wwan0 / 4G in v1
 
-`br-lan` = eth0 + eth3. LAN subnet: `192.168.100.0/24`.
+`br-lan` = eth0 + eth3. LAN subnet: `10.25.0.0/16`.
 
 ## Per-device WAN affinity (active routing model)
 
 **WAN1 (primary) is the default WAN** for every LAN device. Devices whose MAC is in the WAN2
 lock list egress WAN2 (secondary). Applied by `scripts/configure-wan-affinity.sh` and managed
-via the web UI at `http://192.168.100.1/cgi-bin/wan-affinity`.
+via the web UI at `http://10.25.0.1/cgi-bin/wan-affinity`.
 
 ### Marks, rules, tables
 
@@ -53,7 +53,7 @@ via the web UI at `http://192.168.100.1/cgi-bin/wan-affinity`.
 ## DNS
 
 ```text
-LAN client :53 -> dnsmasq (192.168.100.1:53) -> AdGuard Home (127.0.0.1:5354)
+LAN client :53 -> dnsmasq (10.25.0.1:53) -> AdGuard Home (127.0.0.1:5354)
                                                     -> filter lists
                                                     -> ISP plain DNS (policy-routed per WAN)
 ```
@@ -76,7 +76,7 @@ Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate
 - Egress from router: uses the normal main-table default (independent of affinity tables 100/101).
   No interference with WAN affinity.
 - Ingress from tailnet: SSH/LuCI/AdGuard UI reachable on tailnet IP from any approved peer.
-- Subnet routing (opt-in): advertises `192.168.100.0/24` so tailnet peers can reach LAN clients.
+- Subnet routing (opt-in): advertises `10.25.0.0/16` so tailnet peers can reach LAN clients.
 - DNS: `--accept-dns=false` keeps AdGuard as authoritative LAN resolver; tailnet MagicDNS off.
 
 ## Policy engine
@@ -90,7 +90,7 @@ Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate
 - `luci-app-sqm` for CAKE.
 - `luci-app-statistics` / `luci-app-vnstat` for graphs/accounting.
 - OMR LuCI pages for bypass controls.
-- Per-device WAN affinity web UI: `http://192.168.100.1/cgi-bin/wan-affinity` (OUI vendor
+- Per-device WAN affinity web UI: `http://10.25.0.1/cgi-bin/wan-affinity` (OUI vendor
   lookup, device renaming, live conntrack rates).
 
 ## Full data flow
@@ -131,7 +131,7 @@ Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate
         |       -> ISP DNS (policy-routed)        |
         |                                         |
         |  tailscale0 (WG/UDP)                    | <-- ingress from anywhere
-        |   advertises 192.168.100.0/24 (opt-in)  |
+        |   advertises 10.25.0.0/16 (opt-in)     |
         +-----------------------------------------+
               |          |
            eth0        eth3
@@ -139,7 +139,7 @@ Router runs `tailscaled` as a separate ingress path. Joins tailnet as `nexusgate
                       AP mode preferred)
               \          /
                \        /
-            br-lan 192.168.100.0/24
+            br-lan 10.25.0.0/16
                     |
               LAN clients
               (DHCP from NexusGate)

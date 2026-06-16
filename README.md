@@ -48,32 +48,32 @@ No wwan0 / 4G in v1 deployment.
 
 Recommended Wi-Fi router mode:
 
-- Best: Access Point / bridge mode, DHCP off. Clients land directly on `192.168.100.0/24` and can reach NexusGate at `192.168.100.1` for LuCI/SSH — no need to plug into `eth0`.
+- Best: Access Point / bridge mode, DHCP off. Clients land directly on `10.25.0.0/16` and can reach NexusGate at `10.25.0.1` for LuCI/SSH — no need to plug into `eth0`.
 - OK: Router mode, WAN via DHCP from NexusGate on `eth3`. Clients sit behind a second NAT; to admin NexusGate from those clients, either switch the home router to AP mode or use Tailscale (see below).
 
 ## Remote admin
 
-- **From home Wi-Fi (no eth0 plug)**: put home router in AP/bridge mode and hit `http://192.168.100.1` from any Wi-Fi client.
-- **From anywhere (over Internet)**: enable Tailscale via `scripts/configure-tailscale.sh`. Router joins tailnet, advertises `192.168.100.0/24`, exposes SSH+LuCI on its tailnet IP. See `prompts/13-tailscale.md`.
+- **From home Wi-Fi (no eth0 plug)**: put home router in AP/bridge mode and hit `http://10.25.0.1` from any Wi-Fi client.
+- **From anywhere (over Internet)**: enable Tailscale via `scripts/configure-tailscale.sh`. Router joins tailnet, advertises `10.25.0.0/16`, exposes SSH+LuCI on its tailnet IP. See `prompts/13-tailscale.md`.
 
 ## Web UI access
 
 OpenMPTCProuter/OpenWrt already includes LuCI web UI.
 
 ```text
-http://192.168.100.1
-https://192.168.100.1
+http://10.25.0.1
+https://10.25.0.1
 ```
 
 Default service ports on router:
 
 | Service | Port | URL / bind |
 |---|---:|---|
-| LuCI HTTP | 80 | `http://192.168.100.1` |
-| LuCI HTTPS | 443 | `https://192.168.100.1` |
-| SSH | 22 | `ssh root@192.168.100.1` |
-| Client DNS (dnsmasq) | 53 | `192.168.100.1` LAN DNS/DHCP frontend |
-| AdGuard Home UI | 3000 | `http://192.168.100.1:3000` |
+| LuCI HTTP | 80 | `http://10.25.0.1` |
+| LuCI HTTPS | 443 | `https://10.25.0.1` |
+| SSH | 22 | `ssh root@10.25.0.1` |
+| Client DNS (dnsmasq) | 53 | `10.25.0.1` LAN DNS/DHCP frontend |
+| AdGuard Home UI | 3000 | `http://10.25.0.1:3000` |
 | AdGuard Home DNS backend | 5354 | `127.0.0.1#5354` internal only |
 | OMR admin API | 65500 | internal/admin only |
 

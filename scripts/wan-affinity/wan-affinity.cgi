@@ -257,15 +257,19 @@ case "${QUERY_STRING:-}" in
 		t101e=$(jsonesc "$t101")
 
 		# ---- conntrack bandwidth snapshot (two samples ~1s apart) ---------------
-		# For each nf_conntrack line: if ORIGINAL src= is a LAN IP (192.168.100.x),
+		# For each nf_conntrack line: if ORIGINAL src= is a LAN IP (10.25.x.y),
 		# accumulate bytes= values. On each nf_conntrack line, the two bytes= tokens
 		# appear in order: first = original direction (upload for LAN src), second =
 		# reply direction (download for LAN src). Single awk pass per snapshot.
 		_lan_ip=$(uci -q get network.lan.ipaddr 2>/dev/null)
-		case "$_lan_ip" in
-		    *.*.*.*) LAN_PFX="${_lan_ip%.*}." ;;
-		    *) LAN_PFX="192.168.100." ;;   # fallback if uci unavailable
+		_lan_mask=$(uci -q get network.lan.netmask 2>/dev/null)
+		case "$_lan_mask" in
+		    255.255.255.0) LAN_PFX="$(echo "$_lan_ip" | cut -d. -f1-3)." ;;
+		    255.255.0.0)   LAN_PFX="$(echo "$_lan_ip" | cut -d. -f1-2)." ;;
+		    255.0.0.0)     LAN_PFX="$(echo "$_lan_ip" | cut -d. -f1)." ;;
+		    *)             LAN_PFX="$(echo "$_lan_ip" | cut -d. -f1-2)." ;;  # default to /16 (this deployment's mask)
 		esac
+		[ -n "$_lan_ip" ] || LAN_PFX="10.25."   # fallback when uci unavailable (/16)
 		SNAP_A=$(mktemp /tmp/wa_snap_a.XXXXXX)
 		SNAP_B=$(mktemp /tmp/wa_snap_b.XXXXXX)
 

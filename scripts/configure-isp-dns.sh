@@ -151,4 +151,4 @@ ip rule show | grep -E "$(echo "$WAN1_DNS1|$WAN1_DNS2|$WAN2_DNS1|$WAN2_DNS2" | t
 echo
 echo "Verify:"
 dig @"${WAN1_DNS1}" google.com.br +time=3 +short | head -1 || true
-dig @192.168.100.1 google.com.br +time=3 +short | head -1 || true
+dig @10.25.0.1 google.com.br +time=3 +short | head -1 || true

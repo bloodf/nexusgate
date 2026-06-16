@@ -5,9 +5,9 @@ NexusGate uses the native OpenMPTCProuter/OpenWrt LuCI web interface.
 ## Access
 
 ```text
-http://192.168.100.1
-https://192.168.100.1
-ssh root@192.168.100.1
+http://10.25.0.1
+https://10.25.0.1
+ssh root@10.25.0.1
 ```
 
 ## Install UI addons
@@ -30,8 +30,8 @@ mwan3 not installed (depends on `iptables-mod-conntrack-extra`, missing on OMR n
 ## Operator workflow
 
 1. Connect to LAN through `eth0` directly, or via home Wi-Fi router on `eth3`.
-2. Open LuCI at `http://192.168.100.1`.
+2. Open LuCI at `http://10.25.0.1`.
 3. Verify WAN health: `ip route show table 100`, `ip route show table 101`, `ifstatus wan1`, `ifstatus wan2`.
 4. Verify SQM queues in SQM.
 5. Verify bandwidth graphs in statistics/vnstat.
-6. Manage per-device WAN assignments at `http://192.168.100.1/cgi-bin/wan-affinity`.
+6. Manage per-device WAN assignments at `http://10.25.0.1/cgi-bin/wan-affinity`.

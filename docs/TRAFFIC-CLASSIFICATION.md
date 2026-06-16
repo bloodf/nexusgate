@@ -10,7 +10,7 @@ Every LAN device egresses one WAN (one stable public IP). WAN assignment is by M
 - Devices in the WAN2 lock list -> WAN2 (secondary).
 - Devices in the WAN1 lock list -> WAN1 (explicitly pinned).
 
-Manage lock lists via `http://192.168.100.1/cgi-bin/wan-affinity` or by re-running
+Manage lock lists via `http://10.25.0.1/cgi-bin/wan-affinity` or by re-running
 `scripts/configure-wan-affinity.sh` with updated `CLARO_MACS` / `VIVO_MACS`.
 
 ## Gaming UDP (WAN1 pin via OMR bypass)

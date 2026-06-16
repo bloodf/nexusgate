@@ -4,7 +4,7 @@
 Confirm per-device WAN affinity routing, AdGuard DNS filtering, and WAN failover on a deployed router.
 
 ## Inputs
-- Router IP: `192.168.100.1`
+- Router IP: `10.25.0.1`
 - WAN roles: eth1=wan1 (primary, PPPoE/fiber), eth2=wan2 (secondary, DHCP/cable)
 - LAN: eth0+eth3 bridged -> br-lan
 
@@ -56,12 +56,12 @@ If IPs alternate across requests, the affinity mark is not being applied; verify
 ### DNS filtering
 
 ```sh
-dig @192.168.100.1 doubleclick.net +short
+dig @10.25.0.1 doubleclick.net +short
 ```
 Expect `0.0.0.0` or NXDOMAIN.
 
 ```sh
-dig @192.168.100.1 example.com +short
+dig @10.25.0.1 example.com +short
 ```
 Expect a real IP.
 

@@ -25,4 +25,4 @@ opkg install \
 /etc/init.d/vnstat enable
 /etc/init.d/vnstat restart || true
 
-echo "LuCI addons installed. Access: http://192.168.100.1 or https://192.168.100.1"
+echo "LuCI addons installed. Access: http://10.25.0.1 or https://10.25.0.1"

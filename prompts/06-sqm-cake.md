@@ -4,7 +4,7 @@
 Execute NexusGate step `sqm-cake` safely on OpenMPTCProuter.
 
 ## Inputs
-- Router IP: `192.168.100.1` unless changed
+- Router IP: `10.25.0.1` unless changed
 - WAN roles: eth1=wan1 (primary), eth2=wan2 (secondary); eth0+eth3 bridged to br-lan
 
 ## Actions

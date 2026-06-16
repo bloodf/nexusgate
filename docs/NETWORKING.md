@@ -6,18 +6,18 @@ device a single stable public IP. It no longer balances per-flow — see
 
 ## LAN topology (eth3 → unmanaged switch)
 
-`eth3` is the LAN trunk to a TP-Link 1Gb unmanaged switch. All downstream devices share `192.168.100.0/24`.
+`eth3` is the LAN trunk to a TP-Link 1Gb unmanaged switch. All downstream devices share `10.25.0.0/16`.
 
 | Switch port | Device | Notes |
 |---:|---|---|
 | 1 | TP-Link Deco BE65 (main) | AP mode; other 4 Decos mesh wirelessly |
-| 2 | CortexOS local VPS | Reserved `192.168.100.10` (MAC `40:9c:a7:49:4b:62`) |
+| 2 | CortexOS local VPS | Reserved `10.25.0.10` (MAC `40:9c:a7:49:4b:62`) |
 | 3 | WD NAS | Dynamic; firmware-configured static `.187` left in place |
 
-Deco mesh (5x BE65) is in **Access Point mode**: all 5 Decos pull DHCP from NexusGate, all Wi-Fi clients land directly on `192.168.100.0/24`, AdGuard sees every query, and per-device WAN affinity (by client MAC) decides each device's egress WAN. Reservations intentionally not used for Decos.
+Deco mesh (5x BE65) is in **Access Point mode**: all 5 Decos pull DHCP from NexusGate, all Wi-Fi clients land directly on `10.25.0.0/16`, AdGuard sees every query, and per-device WAN affinity (by client MAC) decides each device's egress WAN. Reservations intentionally not used for Decos.
 
-DHCP pool = `192.168.100.50-249`. Static infra range `2-49` reserved.
-DNS push (DHCP option 6) = `192.168.100.1` so every client uses the dnsmasq → AdGuard chain.
+DHCP pool = `10.25.1.1-` (~60000 leases). `10.25.0.0/24` reserved for router (`10.25.0.1`) + static/infra.
+DNS push (DHCP option 6) = `10.25.0.1` so every client uses the dnsmasq → AdGuard chain.
 
 ## SQM / CAKE
 
@@ -32,7 +32,7 @@ Values shown are from the [reference deployment](../README.md#reference-deployme
 
 ## Tailscale DNS intercept
 
-Removed Tailscale leaves clients with `100.100.100.100` in their static DNS config — those packets get routed to the public Internet and dropped. `scripts/configure-dns-intercept.sh` installs an `fw4` DNAT rule that rewrites `100.100.100.100:53` (UDP+TCP) → `192.168.100.1:53` (dnsmasq → AdGuard), so clients keep working without reconfiguration.
+Removed Tailscale leaves clients with `100.100.100.100` in their static DNS config — those packets get routed to the public Internet and dropped. `scripts/configure-dns-intercept.sh` installs an `fw4` DNAT rule that rewrites `100.100.100.100:53` (UDP+TCP) → `10.25.0.1:53` (dnsmasq → AdGuard), so clients keep working without reconfiguration.
 
 ## Default policy: per-device WAN affinity
 
@@ -101,7 +101,7 @@ To change a device's WAN, edit the lock lists and re-apply (see
 |---|---|---|---|
 | `eth0` | physical | (in br-lan) | LAN/mgmt port; bridged |
 | `eth3` | physical | (in br-lan) | LAN downlink to home Wi-Fi router; bridged |
-| `br-lan` | bridge | 192.168.100.1/24 | LAN side, DHCP server |
+| `br-lan` | bridge | 10.25.0.1/16 | LAN side, DHCP server |
 | `eth1` | physical | (pppoe parent) | WAN1 (primary) physical port |
 | `pppoe-wan1` | pppoe | public IPv4 from WAN1 ISP | WAN1 (primary) logical interface (label: "WAN1") |
 | `eth2` | physical | carrier address via DHCP from WAN2 modem (may be CGNAT 100.64.0.0/10) | WAN2 (secondary) physical port (modem in bridge or router mode, label: "WAN2") |
@@ -115,7 +115,7 @@ To change a device's WAN, edit the lock lists and re-apply (see
 | LAN client (WAN2-locked) | Internet | br-lan -> nft mark 0x20000 -> ip rule pri 41 -> single nexthop -> eth2 (WAN2) | 101 |
 | Router itself | Internet | main default (lowest metric) | main |
 | LAN client | LAN client | br-lan switching, no IP routing | n/a |
-| LAN client | NexusGate LuCI/SSH | direct on br-lan to 192.168.100.1 | local |
+| LAN client | NexusGate LuCI/SSH | direct on br-lan to 10.25.0.1 (any 10.25.x.y) | local |
 | Tailnet peer | NexusGate LuCI/SSH | tailscale0 to 100.x.y.z | local |
 | Tailnet peer | LAN client | tailscale0 -> br-lan (subnet route) | main |
 | NexusGate | Tailnet peer (DERP/keepalive) | main default | main |
