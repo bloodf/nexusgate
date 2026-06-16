@@ -16,9 +16,6 @@ opkg install \
   vnstat \
   luci-app-firewall \
   luci-app-commands \
-  luci-proto-qmi \
-  luci-proto-mbim \
-  luci-proto-modemmanager \
   luci-app-omr-bypass || true
 
 /etc/init.d/uhttpd enable
