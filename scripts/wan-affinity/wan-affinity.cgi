@@ -69,7 +69,10 @@ norm_mac() {
 	[ "$(printf '%s' "$1" | wc -l)" -eq 0 ] || return 1
 	# Canonicalize: lowercase, strip blanks; require the ENTIRE result to be
 	# exactly one MAC (grep -x on a single line). Output is always canonical.
-	m=$(printf '%s' "$1" | tr 'A-F' 'a-f' | tr -d '[:space:]')
+	# NOTE: '[:space:]' as a tr operand is malformed everywhere (classes are
+	# only valid inside a bracket set), so tr deletes those LITERAL chars —
+	# mangling the MAC. Use explicit space+tab for portability.
+	m=$(printf '%s' "$1" | tr 'A-F' 'a-f' | tr -d ' \011')
 	printf '%s\n' "$m" | grep -qxE '([0-9a-f]{2}:){5}[0-9a-f]{2}' || return 1
 	printf '%s' "$m"
 }
