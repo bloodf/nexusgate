@@ -37,9 +37,45 @@ set -eu
 # WAN device (SO_BINDTODEVICE) sends out that exact link regardless of routing
 # tables, so success/failure reflects real reachability, not cached state.
 # Two targets so a single dead resolver doesn't false-negative a live WAN.
+#
+# ICMP-blocking ISPs (Claro blocks ICMP to the public internet -- the same
+# reason configure-omr-tracker.sh sets wan2 tracker type=none): ICMP alone
+# would permanently mark WAN2 dead here and misroute table 101. So when ICMP
+# fails, fall back to a device-bound plain-HTTP probe via curl --interface.
+# A completed HTTP response (any status; curl exit 0) proves L3/L4 egress;
+# cert/clock issues can't false-negative. Bounded: 2s connect, 3s total.
+# Default target is a NUMERIC IP so the probe never depends on DNS (a
+# hostname would resolve via the normal route and leak/false-signal).
+# Overridable via uci wan_affinity.probe.http_url for captive/proxy cases.
+#
+# curl --interface support is verified at INSTALL time by
+# configure-wan-affinity.sh (install aborts without it). If curl vanishes
+# at runtime anyway (e.g. package removed), that is an INVALID probe config:
+# log daemon.err edge-triggered and return failure -- but never pretend the
+# ICMP result alone is authoritative for an ICMP-blocked ISP.
+PROBE_URL=$(uci -q get wan_affinity.probe.http_url 2>/dev/null || true)
+[ -n "$PROBE_URL" ] || PROBE_URL="http://1.1.1.1/cdn-cgi/trace"
+
+_curl_ok=0
+command -v curl >/dev/null 2>&1 && curl --help all 2>/dev/null | grep -q -- --interface && _curl_ok=1
+
+_http_reach() {
+	if [ "$_curl_ok" != 1 ]; then
+		if [ ! -f /tmp/wan-affinity.nocurl ]; then
+			logger -t wan-affinity -p daemon.err \
+				"probe config INVALID: curl --interface unavailable; HTTP fallback for ICMP-blocked WANs is disabled (reinstall curl / re-run configure-wan-affinity.sh)" 2>/dev/null || true
+			: > /tmp/wan-affinity.nocurl
+		fi
+		return 1
+	fi
+	rm -f /tmp/wan-affinity.nocurl
+	curl -sS --interface "$1" -o /dev/null --connect-timeout 2 --max-time 3 "$PROBE_URL" >/dev/null 2>&1
+}
+
 _reach() {
 	ping -W1 -c1 -I "$1" 1.1.1.1 >/dev/null 2>&1 && return 0
-	ping -W1 -c1 -I "$1" 8.8.8.8 >/dev/null 2>&1
+	ping -W1 -c1 -I "$1" 8.8.8.8 >/dev/null 2>&1 && return 0
+	_http_reach "$1"
 }
 
 GW1=$(ip route show table 6  2>/dev/null | awk '/^default/{print $3;exit}')
@@ -68,6 +104,45 @@ if [ "$WAN2_OK" = 1 ]; then
 	ip route replace default scope global table 101 via "$GW2" dev "$DEV2"
 elif [ "$WAN1_OK" = 1 ]; then
 	ip route replace default scope global table 101 via "$GW1" dev "$DEV1"
+fi
+
+# ---- both-WAN-down handling --------------------------------------------------
+# When neither WAN passes the egress probe the blocks above skip both tables,
+# which previously left the last-known nexthop in 100/101 (traffic silently
+# routed at a dead gateway). Two distinct cases:
+#
+#   1. Probes failed but a nexthop still exists (tables 6/10 populated): keep
+#      the last-known route (fail-static). Both probes can false-negative in
+#      the same tick under congestion/ICMP loss, and flushing here would
+#      hard-down the LAN on a blip AND let lookups fall through the empty
+#      table into OMR core's pri-50 ECMP rule (table 991337) -- the
+#      flow-splitting behavior this script exists to prevent. Log it so the
+#      state is visible.
+#
+#   2. No nexthop exists at all (tables 6/10 empty -- links torn down, e.g.
+#      dead PPPoE with the session gone): any default left in 100/101 points
+#      at a dismantled path. Replace it with `unreachable` so clients get an
+#      immediate ICMP error instead of a silent blackhole, and so the lookup
+#      still terminates in the table (no ECMP fall-through). The `ip route
+#      replace default ... via` calls above overwrite the unreachable route
+#      on the first tick a WAN recovers.
+if [ "$WAN1_OK" = 0 ] && [ "$WAN2_OK" = 0 ]; then
+	# Edge-triggered logging: this hook runs every tracker tick, so a per-tick
+	# warning would flood the logread ring buffer during a sustained outage.
+	# /tmp flag (tmpfs) records "already logged"; cleared on recovery below.
+	if [ ! -f /tmp/wan-affinity.bothdown ]; then
+		logger -t wan-affinity -p daemon.warn \
+			"both WAN egress probes failed (wan1=${DEV1:-none} wan2=${DEV2:-none}); LAN has no verified uplink" 2>/dev/null || true
+		: > /tmp/wan-affinity.bothdown
+	fi
+	if [ -z "${GW1:-}" ] && [ -z "${GW2:-}" ]; then
+		ip route replace unreachable default table 100
+		ip route replace unreachable default table 101
+	fi
+elif [ -f /tmp/wan-affinity.bothdown ]; then
+	logger -t wan-affinity -p daemon.notice \
+		"WAN egress restored (wan1_ok=$WAN1_OK wan2_ok=$WAN2_OK)" 2>/dev/null || true
+	rm -f /tmp/wan-affinity.bothdown
 fi
 
 # Policy rules (idempotent).

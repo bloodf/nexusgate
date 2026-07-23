@@ -55,6 +55,16 @@ fi
 # ---------------------------------------------------------------------------
 uci -q set network.lan.ip6assign='60'
 
+# HARD GUARANTEE of the "NO WAN/ISP IPv6" claim: step 1 re-enables OMR/netifd
+# v6 handling globally, so pin v6 OFF on both WANs explicitly. Without this, a
+# DHCPv6/RA-capable modem (wan2/eth2) can install a v6 default route that
+# bypasses the v4-only affinity tables 100/101.
+uci -q set network.wan1.ipv6='0'
+uci -q set network.wan2.ipv6='0'
+uci -q delete network.wan1_6 2>/dev/null || true
+uci -q delete network.wan2_6 2>/dev/null || true
+uci -q delete network.wan6 2>/dev/null || true
+
 uci -q set dhcp.lan.dhcpv6='server'
 uci -q set dhcp.lan.ra='server'
 uci -q set dhcp.lan.ra_slaac='1'

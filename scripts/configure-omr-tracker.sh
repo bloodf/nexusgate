@@ -18,6 +18,17 @@ set -eu
 WAN1_DNS1=${WAN1_DNS1:-187.50.250.115}
 WAN1_DNS2=${WAN1_DNS2:-187.50.250.215}
 WAN2_TRACKER_TYPE=${WAN2_TRACKER_TYPE:-none}
+# Only 'dns' and 'none' are verified against this omr-tracker deployment.
+# Other types (e.g. httping) need schema-verified target options; reject
+# them BEFORE any uci mutation so we never commit a broken tracker config.
+case "$WAN2_TRACKER_TYPE" in
+	dns|none) ;;
+	*)
+		echo "ERROR: unsupported WAN2_TRACKER_TYPE='$WAN2_TRACKER_TYPE' (allowed: dns, none)." >&2
+		echo "  Verify the installed omr-tracker UCI schema before adding new types." >&2
+		exit 1
+		;;
+esac
 WAN2_DNS1=${WAN2_DNS1:-181.213.132.2}
 WAN2_DNS2=${WAN2_DNS2:-181.213.132.3}
 
@@ -51,8 +62,10 @@ uci add_list omr-tracker.wan1.hosts="$WAN1_DNS2"
 uci -q set omr-tracker.wan2=interface
 uci -q set omr-tracker.wan2.enabled='1'
 uci -q set omr-tracker.wan2.type="$WAN2_TRACKER_TYPE"
+# Always clear per-type leftovers so switching type on re-run doesn't keep
+# stale probe targets (hosts from a previous type=dns run, etc.).
+uci -q delete omr-tracker.wan2.hosts 2>/dev/null || true
 if [ "$WAN2_TRACKER_TYPE" = "dns" ]; then
-	uci -q delete omr-tracker.wan2.hosts 2>/dev/null || true
 	uci add_list omr-tracker.wan2.hosts="$WAN2_DNS1"
 	uci add_list omr-tracker.wan2.hosts="$WAN2_DNS2"
 fi

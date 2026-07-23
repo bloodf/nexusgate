@@ -63,8 +63,15 @@ urldecode() {
 
 # lowercase + validate; echoes the mac on success, empty on failure
 norm_mac() {
-	m=$(printf '%s' "$1" | tr 'A-F' 'a-f' | sed 's/[[:space:]]//g')
-	echo "$m" | grep -qE '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' && printf '%s' "$m"
+	# Trust boundary: reject any input containing CR/LF outright — a split or
+	# multiline MAC must never be silently repaired into a valid one.
+	case "$1" in *"$(printf '\r')"* ) return 1 ;; esac
+	[ "$(printf '%s' "$1" | wc -l)" -eq 0 ] || return 1
+	# Canonicalize: lowercase, strip blanks; require the ENTIRE result to be
+	# exactly one MAC (grep -x on a single line). Output is always canonical.
+	m=$(printf '%s' "$1" | tr 'A-F' 'a-f' | tr -d '[:space:]')
+	printf '%s\n' "$m" | grep -qxE '([0-9a-f]{2}:){5}[0-9a-f]{2}' || return 1
+	printf '%s' "$m"
 }
 
 # JSON-escape an arbitrary string: escape backslash, double-quote, tab, CR, LF.

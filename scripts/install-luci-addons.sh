@@ -2,6 +2,8 @@
 set -eu
 
 opkg update
+
+# Required packages — hard-fail if any of these can't install.
 opkg install \
   luci \
   luci-ssl \
@@ -15,8 +17,10 @@ opkg install \
   luci-app-vnstat \
   vnstat \
   luci-app-firewall \
-  luci-app-commands \
-  luci-app-omr-bypass || true
+  luci-app-commands
+
+# Optional: OMR-specific bypass UI; absent on some OMR builds. Failure tolerated.
+opkg install luci-app-omr-bypass || echo "NOTE: luci-app-omr-bypass unavailable (optional, continuing)"
 
 /etc/init.d/uhttpd enable
 /etc/init.d/uhttpd restart

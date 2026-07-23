@@ -12,12 +12,16 @@ LAN_NETMASK=${LAN_NETMASK:-255.255.0.0}
 
 uci batch <<EOF
 # Bridge eth0 + eth3 as LAN. eth3 is the home Wi-Fi router uplink.
-set network.lan_dev=device
-set network.lan_dev.name='br-lan'
-set network.lan_dev.type='bridge'
-delete network.lan_dev.ports
-add_list network.lan_dev.ports='eth0'
-add_list network.lan_dev.ports='eth3'
+# Section name MUST match configs/network-nics.uci ('br_lan'); using a
+# different named section (old 'lan_dev') plus a uci import of network-nics.uci
+# yields TWO device sections both claiming name 'br-lan'. Migrate/clean up.
+delete network.lan_dev
+set network.br_lan=device
+set network.br_lan.name='br-lan'
+set network.br_lan.type='bridge'
+delete network.br_lan.ports
+add_list network.br_lan.ports='eth0'
+add_list network.br_lan.ports='eth3'
 
 set network.lan=interface
 set network.lan.device='br-lan'

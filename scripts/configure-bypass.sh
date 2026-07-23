@@ -1,5 +1,12 @@
 #!/bin/sh
 set -eu
+# Idempotent: delete any prior 'Gaming UDP' rule(s) before adding, so reruns
+# don't stack duplicate omr-bypass rules.
+while uci -q show omr-bypass | grep -q "name='Gaming UDP'"; do
+	_sec=$(uci -q show omr-bypass | sed -n "s/^omr-bypass\.\(@rule\[[0-9]*\]\)\.name='Gaming UDP'$/\1/p" | head -n1)
+	[ -n "$_sec" ] || break
+	uci -q delete "omr-bypass.$_sec"
+done
 uci -q batch <<'EOF'
 add omr-bypass rule
 set omr-bypass.@rule[-1].name='Gaming UDP'

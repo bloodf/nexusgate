@@ -109,7 +109,16 @@ if command -v jsonfilter >/dev/null 2>&1; then
 	[ -n "\$_l4" ] && WAN2_DNS2="\$_l4"
 fi
 
-_add() { ip rule show | grep -q "to \$1 lookup \$2" || ip rule add priority "\$3" to "\$1" lookup "\$2" 2>/dev/null || true; }
+# Flush our priority slots BEFORE adding: lease renewals change resolver IPs,
+# and stale rules at 89-92 both leak DNS out the wrong WAN and make the
+# subsequent 'ip rule add priority 89-92' fail silently. Loop because iproute
+# permits multiple rules per priority.
+for _p in 89 90 91 92; do
+	while ip rule show | grep -q "^\$_p:"; do
+		ip rule del priority "\$_p" 2>/dev/null || break
+	done
+done
+_add() { ip rule add priority "\$3" to "\$1" lookup "\$2" 2>/dev/null || true; }
 _add "\$WAN1_DNS1" 6  89
 _add "\$WAN1_DNS2" 6  90
 _add "\$WAN2_DNS1" 10 91

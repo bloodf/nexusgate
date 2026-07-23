@@ -51,4 +51,6 @@ config interface 'wan2'
 	option defaultroute '0'
 	option peerdns '0'
 	option metric '20'
+	# v4-only like wan1: affinity tables 100/101 are v4; a WAN v6 default would bypass them.
+	option ipv6 '0'
 	option multipath 'off'

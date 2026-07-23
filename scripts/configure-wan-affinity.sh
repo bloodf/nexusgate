@@ -48,6 +48,7 @@ PT_DIR=/usr/share/omr/post-tracking.d
 PT_FILE="$PT_DIR/098-wan-affinity"
 APPLY="$LIB_DIR/apply-affinity.sh"
 CGI=/www/cgi-bin/wan-affinity
+NEXUS_CGI=/www/cgi-bin/nexus
 SRC="$(dirname "$0")/wan-affinity"
 TS=$(date +%s)
 
@@ -75,12 +76,22 @@ mkdir -p "$WA_DIR"
 [ -f "$WA_DIR/names.list" ] || touch "$WA_DIR/names.list"
 
 # ---- 2. Install helper, failover hook, web UI, OUI database -----------------
+# HARD REQUIREMENT: 098-wan-affinity's HTTP fallback probe (for ICMP-blocking
+# ISPs like Claro) needs curl with --interface. Same predicate as the hook.
+# Abort BEFORE deploying anything: without it, an ICMP-blocked WAN would be
+# routed as dead and table 101 misdirected.
+if ! { command -v curl >/dev/null 2>&1 && curl --help all 2>/dev/null | grep -q -- --interface; }; then
+	echo "ERROR: curl with --interface support is required (opkg update && opkg install curl)." >&2
+	echo "Refusing to install: HTTP egress probe for ICMP-blocked WANs would be unavailable." >&2
+	exit 1
+fi
 mkdir -p "$LIB_DIR" "$PT_DIR" /www/cgi-bin
 if [ -d "$SRC" ]; then
 	for pair in \
 		"apply-affinity.sh:$APPLY" \
 		"098-wan-affinity:$PT_FILE" \
-		"wan-affinity.cgi:$CGI"; do
+		"wan-affinity.cgi:$CGI" \
+		"nexus.cgi:$NEXUS_CGI"; do
 		s="$SRC/${pair%%:*}"; d=${pair#*:}
 		if [ -f "$s" ]; then
 			[ -f "$d" ] && cp "$d" "$d.bak.$TS"
@@ -184,6 +195,7 @@ echo
 echo "== table 100 (WAN1 default) =="; ip route show table 100
 echo "== table 101 (WAN2) =="; ip route show table 101
 echo
-echo "Web UI: http://10.25.0.1/cgi-bin/wan-affinity"
+echo "Web UI (unified):  http://10.25.0.1/cgi-bin/nexus"
+echo "Web UI (devices):  http://10.25.0.1/cgi-bin/wan-affinity"
 echo "Done. Verify a WAN2 device shows the WAN2 public IP and a default device"
 echo "shows the WAN1 public IP, both stable across repeated calls."
