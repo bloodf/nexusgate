@@ -16,6 +16,14 @@
 chain wan_affinity {
     type filter hook prerouting priority -150; policy accept;
 
+    # GUARDS (generator apply-affinity.sh emits these; NEVER weaken):
+    # LAN-origin only - never mark WAN-ingress replies.
+    iifname != "br-lan" return comment "LAN-origin only"
+    # First mark writer at pri -150: any nonzero mark here is foreign
+    # (OMR exact fwmarks like 0x453913, Tailscale 0x80000). OR-ing our
+    # bits into those would corrupt OMR's exact-match rules.
+    meta mark != 0 return comment "foreign packet mark: hands off"
+
     # Claro-locked devices (e.g. streaming boxes) -> Claro (wan2).
     ether saddr {
         40:f6:bc:38:df:7c, 44:d5:cc:e5:ad:a7,

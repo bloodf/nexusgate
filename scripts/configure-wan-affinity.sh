@@ -20,7 +20,9 @@
 # Files installed:
 #   /etc/wan-affinity/{claro,vivo}.list      lock lists (source of truth)
 #   /etc/wan-affinity/names.list             device friendly names (created empty)
+#   /etc/wan-affinity/balanced.list          balanced-policy members (created empty)
 #   /usr/lib/wan-affinity/apply-affinity.sh  lists -> nft + routing (live)
+#   /usr/lib/wan-affinity/gen-dyn-nft.sh     balanced-steering dyn nft generator
 #   /usr/lib/wan-affinity/oui.db             offline OUI vendor lookup database
 #   /usr/share/omr/post-tracking.d/098-wan-affinity   failover hook
 #   /www/cgi-bin/wan-affinity                web UI (http://10.25.0.1/cgi-bin/wan-affinity)
@@ -47,6 +49,7 @@ NFT_DIR=/etc/nftables.d
 PT_DIR=/usr/share/omr/post-tracking.d
 PT_FILE="$PT_DIR/098-wan-affinity"
 APPLY="$LIB_DIR/apply-affinity.sh"
+GEN_DYN="$LIB_DIR/gen-dyn-nft.sh"
 CGI=/www/cgi-bin/wan-affinity
 NEXUS_CGI=/www/cgi-bin/nexus
 SRC="$(dirname "$0")/wan-affinity"
@@ -75,6 +78,11 @@ mkdir -p "$WA_DIR"
 # Seed names.list (device friendly names) if absent. Never clobber existing.
 [ -f "$WA_DIR/names.list" ] || touch "$WA_DIR/names.list"
 
+# Seed balanced.list (balanced-policy membership) if absent. Never clobber
+# existing. Without this file gen-dyn-nft.sh renders an empty dynamic set and
+# every installed balanced config stays inactive.
+[ -f "$WA_DIR/balanced.list" ] || touch "$WA_DIR/balanced.list"
+
 # ---- 2. Install helper, failover hook, web UI, OUI database -----------------
 # HARD REQUIREMENT: 098-wan-affinity's HTTP fallback probe (for ICMP-blocking
 # ISPs like Claro) needs curl with --interface. Same predicate as the hook.
@@ -89,6 +97,7 @@ mkdir -p "$LIB_DIR" "$PT_DIR" /www/cgi-bin
 if [ -d "$SRC" ]; then
 	for pair in \
 		"apply-affinity.sh:$APPLY" \
+		"gen-dyn-nft.sh:$GEN_DYN" \
 		"098-wan-affinity:$PT_FILE" \
 		"wan-affinity.cgi:$CGI" \
 		"nexus.cgi:$NEXUS_CGI"; do

@@ -13,10 +13,17 @@
 #
 # POST WIRE FORMAT:
 #   action=save (default / no action field): field "pairs", value = comma-separated
-#     MAC|w tokens where w is v (wan1/vivo), c (wan2/claro), or d/absent (default).
+#     MAC|w tokens where w is v (wan1/vivo), c (wan2/claro), b (balanced/Auto
+#     spillover pool), or d/absent (default).
 #     Example decoded: aa:bb:cc:dd:ee:ff|c,11:22:33:44:55:66|v
 #   action=rename: fields "mac" and "name". Updates names.list.
 #     Returns {"ok":true,"msg":"Name saved."} or {"ok":false,"msg":"..."}.
+#   action=capacity: fields wan1_down_mbps wan1_up_mbps wan2_down_mbps
+#     wan2_up_mbps hi_pct lo_pct cooldown_s. ALL fields validated before ANY
+#     uci write (same constraints 098-wan-affinity enforces: Mbps > 0,
+#     0 < lo_pct < hi_pct <= 100, cooldown_s unsigned). Whole POST rejected on
+#     any invalid field - never a partial commit. On success commits uci and
+#     runs apply-affinity.sh so steering state updates immediately.
 #
 # Device discovery: /tmp/dhcp.leases (IP/MAC/name) merged with any locked MACs
 #   that are currently offline (so a device lock is never silently dropped).
@@ -49,6 +56,7 @@ WA_DIR=/etc/wan-affinity
 CLARO_LIST="$WA_DIR/claro.list"
 VIVO_LIST="$WA_DIR/vivo.list"
 NAMES_LIST="$WA_DIR/names.list"
+BAL_LIST="$WA_DIR/balanced.list"
 APPLY=/usr/lib/wan-affinity/apply-affinity.sh
 OUI_DB=/usr/lib/wan-affinity/oui.db
 LEASES=/tmp/dhcp.leases
@@ -147,6 +155,13 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 	post_action=""
 	post_mac=""
 	post_name=""
+	cap_w1d=""
+	cap_w1u=""
+	cap_w2d=""
+	cap_w2u=""
+	cap_hi=""
+	cap_lo=""
+	cap_cd=""
 	# set -f disables glob expansion: a bare `*` token in the body would otherwise
 	# expand to filenames during the unquoted `for kv in $body` split.
 	set -f
@@ -162,6 +177,13 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 			pairs)  pairs_raw="$dv" ;;
 			mac)    post_mac="$dv" ;;
 			name)   post_name="$dv" ;;
+			wan1_down_mbps) cap_w1d="$dv" ;;
+			wan1_up_mbps)   cap_w1u="$dv" ;;
+			wan2_down_mbps) cap_w2d="$dv" ;;
+			wan2_up_mbps)   cap_w2u="$dv" ;;
+			hi_pct)     cap_hi="$dv" ;;
+			lo_pct)     cap_lo="$dv" ;;
+			cooldown_s) cap_cd="$dv" ;;
 		esac
 	done
 	IFS=$OLD_IFS
@@ -202,11 +224,93 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 		exit 0
 	fi
 
-	# ---- action=save (default): bulk WAN assignment ----------------------------
-	newvivo=""
-	newclaro=""
+	# ---- action=capacity: per-WAN capacity + steering thresholds ---------------
+	# Validate EVERYTHING first, then write. Constraints mirror the consumer
+	# (098-wan-affinity): positive integer Mbps for all four capacities,
+	# 0 < lo_pct < hi_pct <= 100, cooldown_s unsigned integer. A single invalid
+	# field rejects the whole POST with NO uci mutation, so the hook never sees
+	# a half-written capacity section (its silent defaulting would mask the bug).
+	if [ "$post_action" = "capacity" ]; then
+		_pnum() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -gt 0 ]; }
+		_puint() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 
-	# Parse: split on comma, then split each token on pipe
+		for _cv in "$cap_w1d" "$cap_w1u" "$cap_w2d" "$cap_w2u"; do
+			if ! _pnum "$_cv"; then
+				printf '{"ok":false,"msg":"All four capacities must be whole Mbps > 0."}'
+				exit 0
+			fi
+		done
+		if ! _pnum "$cap_hi" || ! _pnum "$cap_lo" \
+			|| [ "$cap_hi" -gt 100 ] || [ "$cap_lo" -ge "$cap_hi" ]; then
+			printf '{"ok":false,"msg":"Thresholds must satisfy 0 < low < high <= 100."}'
+			exit 0
+		fi
+		if ! _puint "$cap_cd"; then
+			printf '{"ok":false,"msg":"Cooldown must be a whole number of seconds (0 allowed)."}'
+			exit 0
+		fi
+
+		# All valid -> write. The capacity SECTION must exist before any
+		# option set: nothing in the repo seeds the wan_affinity package, and
+		# `uci set p.s.o=v` fails when section s is absent.
+		if ! uci -q get wan_affinity.capacity >/dev/null 2>&1; then
+			touch /etc/config/wan_affinity 2>/dev/null || true
+			if ! uci -q set wan_affinity.capacity=capacity; then
+				printf '{"ok":false,"msg":"uci: cannot create capacity section."}'
+				exit 0
+			fi
+		fi
+		# Every set must succeed BEFORE commit: a failed set with a successful
+		# commit would report success while persisting missing/stale options.
+		# On any failure, revert the staged changes so nothing partial lingers.
+		if ! { uci -q set wan_affinity.capacity.wan1_down_mbps="$cap_w1d" \
+			&& uci -q set wan_affinity.capacity.wan1_up_mbps="$cap_w1u" \
+			&& uci -q set wan_affinity.capacity.wan2_down_mbps="$cap_w2d" \
+			&& uci -q set wan_affinity.capacity.wan2_up_mbps="$cap_w2u" \
+			&& uci -q set wan_affinity.capacity.hi_pct="$cap_hi" \
+			&& uci -q set wan_affinity.capacity.lo_pct="$cap_lo" \
+			&& uci -q set wan_affinity.capacity.cooldown_s="$cap_cd"; }; then
+			uci -q revert wan_affinity 2>/dev/null || true
+			printf '{"ok":false,"msg":"uci set failed; capacity not saved."}'
+			exit 0
+		fi
+		if ! uci -q commit wan_affinity; then
+			printf '{"ok":false,"msg":"uci commit failed."}'
+			exit 0
+		fi
+
+		# Run the shared apply path so steering activates/deactivates NOW;
+		# merely committing would wait for the next tracker tick.
+		if [ -x "$APPLY" ]; then
+			if out=$("$APPLY" 2>&1); then
+				printf '{"ok":true,"msg":"Capacities saved. Steering config is live."}'
+			else
+				safe=$(jsonesc "$out")
+				printf '{"ok":false,"msg":"Saved, but apply error: %s"}' "$safe"
+			fi
+		else
+			printf '{"ok":true,"msg":"Capacities saved (apply helper missing; live at next tracker tick)."}'
+		fi
+		exit 0
+	fi
+
+	# Reject unknown nonempty action values BEFORE the bulk-save fallthrough.
+	# Without this, a typo'd or future action that carries no "pairs" field
+	# would fall through to bulk-save with an empty pairs_raw and silently
+	# wipe the lock/balanced lists. Empty action and "save" are the two
+	# spellings the shipped UI uses.
+	if [ -n "$post_action" ] && [ "$post_action" != "save" ]; then
+		safe_act=$(jsonesc "$post_action")
+		printf '{"ok":false,"msg":"Unknown action: %s"}' "$safe_act"
+		exit 0
+	fi
+
+	# ---- action=save (default): bulk WAN assignment ----------------------------
+	# Parse: split on comma, then split each token on pipe. Duplicate MACs in one
+	# POST (e.g. "same|v,same|c") are resolved LAST-TOKEN-WINS via the awk map
+	# below, so a MAC can never land in both lists (cross-list overlap would make
+	# the effective pin depend on list-check ordering elsewhere).
+	assign=""
 	OLD_IFS=$IFS
 	IFS=','
 	for token in $pairs_raw; do
@@ -216,23 +320,38 @@ if [ "${REQUEST_METHOD:-GET}" = "POST" ]; then
 		cm=$(norm_mac "$mac_part")
 		[ -z "$cm" ] && continue  # discard invalid MACs silently
 		case "$wan_part" in
-			v) newvivo="$newvivo$cm
+			v|c|b) assign="$assign$cm $wan_part
 " ;;
-			c) newclaro="$newclaro$cm
-" ;;
-			*) ;;  # d or anything else -> default (not in either list)
+			*)   assign="$assign$cm d
+" ;;  # d or anything else -> default (not in any list)
 		esac
 	done
 	IFS=$OLD_IFS
 
+	# Last assignment per MAC wins; then split into per-list membership.
+	final=$(printf '%s' "$assign" | awk '{w[$1]=$2} END{for(m in w) print m, w[m]}')
+	newvivo=$(printf '%s\n' "$final"  | awk '$2=="v"{print $1}')
+	newclaro=$(printf '%s\n' "$final" | awk '$2=="c"{print $1}')
+	newbal=$(printf '%s\n' "$final"   | awk '$2=="b"{print $1}')
+
 	# Atomic list writes: temp in $WA_DIR so mv is a same-filesystem rename (not a
 	# cross-fs copy), matching the names.list pattern at lines 164-169 above.
+	# PREPARE-THEN-COMMIT: both temp files are fully written and flushed BEFORE
+	# either rename, so the only non-atomic window is the two back-to-back mv
+	# calls (individual mvs are atomic; the pair is not). A crash exactly between
+	# them leaves new vivo.list + old claro.list, but never a partial file, and
+	# last-token-wins above guarantees the two new lists are disjoint so the
+	# worst case is one stale (pre-existing) pin, not a cross-list conflict
+	# introduced by this save.
 	_tmp_vivo=$(mktemp "$WA_DIR/.vivo.XXXXXX")
-	printf '%s' "$newvivo"  | sed '/^$/d' | sort -u > "$_tmp_vivo"
-	mv "$_tmp_vivo" "$VIVO_LIST"
 	_tmp_claro=$(mktemp "$WA_DIR/.claro.XXXXXX")
+	_tmp_bal=$(mktemp "$WA_DIR/.balanced.XXXXXX")
+	printf '%s' "$newvivo"  | sed '/^$/d' | sort -u > "$_tmp_vivo"
 	printf '%s' "$newclaro" | sed '/^$/d' | sort -u > "$_tmp_claro"
+	printf '%s' "$newbal"   | sed '/^$/d' | sort -u > "$_tmp_bal"
+	mv "$_tmp_vivo" "$VIVO_LIST"
 	mv "$_tmp_claro" "$CLARO_LIST"
+	mv "$_tmp_bal" "$BAL_LIST"
 
 	if [ -x "$APPLY" ]; then
 		if out=$("$APPLY" 2>&1); then
@@ -265,6 +384,52 @@ case "${QUERY_STRING:-}" in
 		w2l=$(jsonesc "$wan2_label")
 		t100e=$(jsonesc "$t100")
 		t101e=$(jsonesc "$t101")
+
+		# ---- capacity config + balanced-steering state for the UI ----------------
+		# Numbers are validated before interpolation into JSON: any missing or
+		# non-numeric uci value becomes JSON null, never raw shell text.
+		_jnum() { case "$1" in ''|*[!0-9]*) printf 'null' ;; *) printf '%s' "$1" ;; esac; }
+		mc_w1d=$(uci -q get wan_affinity.capacity.wan1_down_mbps 2>/dev/null || true)
+		mc_w1u=$(uci -q get wan_affinity.capacity.wan1_up_mbps   2>/dev/null || true)
+		mc_w2d=$(uci -q get wan_affinity.capacity.wan2_down_mbps 2>/dev/null || true)
+		mc_w2u=$(uci -q get wan_affinity.capacity.wan2_up_mbps   2>/dev/null || true)
+		mc_hi=$(uci -q get wan_affinity.capacity.hi_pct 2>/dev/null || true)
+		mc_lo=$(uci -q get wan_affinity.capacity.lo_pct 2>/dev/null || true)
+		mc_cd=$(uci -q get wan_affinity.capacity.cooldown_s 2>/dev/null || true)
+
+		# steering configured = all four capacities are positive ints (mirrors the
+		# 098-wan-affinity hard gate); active additionally needs a non-empty
+		# balanced.list with at least one MAC-ish line and the generator present.
+		_cfg=false
+		case "$mc_w1d" in ''|0|*[!0-9]*) : ;; *) case "$mc_w1u" in ''|0|*[!0-9]*) : ;; *)
+		case "$mc_w2d" in ''|0|*[!0-9]*) : ;; *) case "$mc_w2u" in ''|0|*[!0-9]*) : ;; *)
+			_cfg=true ;; esac ;; esac ;; esac ;; esac
+		# _ready mirrors the hook's _bal_active preconditions (config + non-empty
+		# balanced list + generator present). It is NOT proof the hook ran.
+		_ready=false
+		if [ "$_cfg" = true ] && [ -s "$BAL_LIST" ] \
+			&& grep -qE '^[[:space:]]*[0-9a-fA-F:]' "$BAL_LIST" 2>/dev/null \
+			&& [ -x /usr/lib/wan-affinity/gen-dyn-nft.sh ]; then
+			_ready=true
+		fi
+		# Ground truth that steering actually ran: the hook writes field 10
+		# (target wan1|wan2) of /tmp/wan-affinity.steer only when its own
+		# _bal_active gate passed. Parse defensively - missing/short/garbled
+		# state yields null/inactive, never shell arithmetic or bad JSON.
+		STEER_STATE=/tmp/wan-affinity.steer
+		st_target=""
+		if [ -f "$STEER_STATE" ]; then
+			st_target=$(awk 'NR==1 && NF>=10 && ($10=="wan1" || $10=="wan2"){print $10}' "$STEER_STATE" 2>/dev/null || true)
+		fi
+		_act=false
+		if [ "$_ready" = true ] && [ -n "$st_target" ]; then
+			_act=true
+		fi
+		if [ -n "$st_target" ]; then
+			st_target_json="\"$st_target\""
+		else
+			st_target_json=null
+		fi
 
 		# ---- conntrack bandwidth snapshot (two samples ~1s apart) ---------------
 		# For each nf_conntrack line: if ORIGINAL src= is a LAN IP (10.25.x.y),
@@ -326,8 +491,11 @@ case "${QUERY_STRING:-}" in
 
 		rm -f "$SNAP_A" "$SNAP_B"
 
-		printf '{"meta":{"wan1_label":"%s","wan2_label":"%s","table100_dev":"%s","table101_dev":"%s"},"devices":[' \
-			"$w1l" "$w2l" "$t100e" "$t101e"
+		printf '{"meta":{"wan1_label":"%s","wan2_label":"%s","table100_dev":"%s","table101_dev":"%s","capacity":{"wan1_down_mbps":%s,"wan1_up_mbps":%s,"wan2_down_mbps":%s,"wan2_up_mbps":%s,"hi_pct":%s,"lo_pct":%s,"cooldown_s":%s},"steering":{"configured":%s,"active":%s,"target":%s}},"devices":[' \
+			"$w1l" "$w2l" "$t100e" "$t101e" \
+			"$(_jnum "$mc_w1d")" "$(_jnum "$mc_w1u")" "$(_jnum "$mc_w2d")" "$(_jnum "$mc_w2u")" \
+			"$(_jnum "$mc_hi")" "$(_jnum "$mc_lo")" "$(_jnum "$mc_cd")" \
+			"$_cfg" "$_act" "$st_target_json"
 
 		sep=""
 		seen=" "
@@ -340,7 +508,11 @@ case "${QUERY_STRING:-}" in
 				case "$seen" in *" $m "*) continue ;; esac
 				seen="$seen$m "
 
+				# balanced checked FIRST so a static pin overwrites it: at runtime the
+				# static chain runs before the dyn chain and wins overlaps, so report
+				# the effective result even for manually-corrupted overlapping lists.
 				wan="default"
+				in_list "$m" "$BAL_LIST"   && wan="balanced"
 				in_list "$m" "$VIVO_LIST"  && wan="wan1"
 				in_list "$m" "$CLARO_LIST" && wan="wan2"
 
@@ -384,8 +556,8 @@ case "${QUERY_STRING:-}" in
 			done < "$LEASES"
 		fi
 
-		# locked-but-offline devices not in current leases
-		for lf in "$VIVO_LIST" "$CLARO_LIST"; do
+		# locked/balanced-but-offline devices not in current leases
+		for lf in "$VIVO_LIST" "$CLARO_LIST" "$BAL_LIST"; do
 			[ -f "$lf" ] || continue
 			while IFS= read -r line; do
 				m=$(echo "$line" | sed 's/#.*//; s/[[:space:]]//g' | tr 'A-F' 'a-f')
@@ -393,7 +565,11 @@ case "${QUERY_STRING:-}" in
 				case "$seen" in *" $m "*) continue ;; esac
 				seen="$seen$m "
 
+				# balanced checked FIRST so a static pin overwrites it: at runtime the
+				# static chain runs before the dyn chain and wins overlaps, so report
+				# the effective result even for manually-corrupted overlapping lists.
 				wan="default"
+				in_list "$m" "$BAL_LIST"   && wan="balanced"
 				in_list "$m" "$VIVO_LIST"  && wan="wan1"
 				in_list "$m" "$CLARO_LIST" && wan="wan2"
 
@@ -438,93 +614,137 @@ cat <<HTMLHEAD
 <style>
 :root{color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0e1116;color:#e6edf3}
+body{margin:0;font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1020;color:#e6ecff}
 .wrap{max-width:960px;margin:0 auto;padding:18px 16px}
 /* ---- header bar ---- */
 .hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 4px}
 h1{font-size:19px;margin:0;flex:1 1 auto}
 .hdr-right{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.count-summary{color:#8b949e;font-size:13px}
-.count-summary b{color:#e6edf3}
+.count-summary{color:#8b96b8;font-size:13px}
+.count-summary b{color:#e6ecff}
 /* ---- toolbar ---- */
-.toolbar{display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap}
-.toolbar input[type=search]{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:7px 10px;font-size:13px;width:220px;flex:1 1 160px;max-width:320px}
-.toolbar input[type=search]::placeholder{color:#484f58}
-.live-label{font-size:13px;color:#8b949e;display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
+.toolbar{display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap;position:sticky;top:0;z-index:5;background:#0b1020;padding:10px 0;box-shadow:0 6px 12px -8px rgba(0,0,0,.8)}
+.toolbar input[type=search]{background:#0b1020;color:#e6ecff;border:1px solid #232c4d;border-radius:6px;padding:7px 10px;font-size:13px;width:220px;flex:1 1 160px;max-width:320px}
+.toolbar input[type=search]::placeholder{color:#4a5578}
+.live-label{font-size:13px;color:#8b96b8;display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none}
 .live-label input{cursor:pointer}
+/* ---- accessible focus ---- */
+button:focus-visible,input:focus-visible,select:focus-visible,label:focus-within,.th-btn:focus-visible{outline:2px solid #4da3ff;outline-offset:1px}
+.seg label:focus-visible{outline-offset:-2px}
 /* ---- meta line ---- */
-.meta{color:#8b949e;font-size:13px;margin:0 0 12px}
-.meta b{color:#e6edf3}
+.meta{color:#8b96b8;font-size:13px;margin:0 0 12px}
+.meta b{color:#e6ecff}
 /* ---- toast ---- */
 .toast{padding:10px 14px;border-radius:8px;margin:0 0 14px;font-size:14px;display:none}
-.toast.ok{background:#10301a;border:1px solid #1f6f37;color:#5ff08a;display:block}
-.toast.err{background:#3a1414;border:1px solid #8b2a2a;color:#ff9b9b;display:block}
+.toast.ok{background:#10301a;border:1px solid #1f6f37;color:#3ddc84;display:block}
+.toast.err{background:#3a1414;border:1px solid #8b2a2a;color:#ff5470;display:block}
 /* ---- table ---- */
-table{width:100%;border-collapse:collapse;background:#161b22;border-radius:10px;overflow:hidden}
-th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #21262d;font-size:14px;vertical-align:middle}
-th{background:#1c2230;color:#9da7b3;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px;cursor:pointer;user-select:none;white-space:nowrap}
-th:hover{color:#e6edf3}
+table{width:100%;border-collapse:collapse;background:#141b31;border-radius:10px;overflow:hidden}
+th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #232c4d;font-size:14px;vertical-align:middle}
+th{background:#182038;color:#8b96b8;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px;user-select:none;white-space:nowrap;padding:0}
+th:last-child{padding:9px 10px}
+.th-btn{display:block;width:100%;background:none;border:0;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;text-align:left;padding:9px 10px;cursor:pointer;border-radius:0}
+.th-btn:hover{color:#e6ecff}
 th .sort-arrow{font-size:10px;opacity:.5;margin-left:3px}
-th.active-sort .sort-arrow{opacity:1;color:#58a6ff}
+th.active-sort .sort-arrow{opacity:1;color:#4da3ff}
 tr:last-child td{border-bottom:none}
 tr.hidden-row{display:none}
 .mac{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#c9d1d9}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .dot-on{background:#3fb950;box-shadow:0 0 0 2px #10301a}
-.dot-off{background:#484f58}
+.dot-off{background:#4a5578}
 /* row accent by WAN assignment */
-.r-wan1 td:first-child{border-left:3px solid #58a6ff}
+.r-wan1 td:first-child{border-left:3px solid #4da3ff}
 .r-wan2 td:first-child{border-left:3px solid #d2a8ff}
 .r-default td:first-child{border-left:3px solid transparent}
 /* ---- segmented WAN control ---- */
-.seg{display:inline-flex;border:1px solid #30363d;border-radius:6px;overflow:hidden;font-size:12px}
-.seg label{padding:5px 9px;cursor:pointer;color:#8b949e;white-space:nowrap;transition:background .12s,color .12s}
+.seg{display:inline-flex;border:1px solid #232c4d;border-radius:6px;overflow:hidden;font-size:12px}
+.seg label{padding:5px 9px;cursor:pointer;color:#8b96b8;white-space:nowrap;transition:background .12s,color .12s}
 .seg input[type=radio]{display:none}
-.seg input:checked + label.lbl-default{background:#1f3a1f;color:#5ff08a}
-.seg input:checked + label.lbl-wan1{background:#132a45;color:#58a6ff}
+.seg input:checked + label.lbl-default{background:#1f3a1f;color:#3ddc84}
+.seg input:checked + label.lbl-wan1{background:#132a45;color:#4da3ff}
 .seg input:checked + label.lbl-wan2{background:#2c1f45;color:#d2a8ff}
-.seg label:hover{background:#21262d;color:#e6edf3}
+.seg input:checked + label.lbl-balanced{background:#3a2f14;color:#e3b341}
+.seg label:hover{background:#232c4d;color:#e6ecff}
 /* ---- buttons ---- */
 button{border:0;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:600;cursor:pointer;transition:background .12s}
 .btn-save{background:#238636;color:#fff}
 .btn-save:hover{background:#2ea043}
-.btn-save:disabled{background:#161b22;color:#484f58;cursor:not-allowed;border:1px solid #30363d}
-.btn-refresh{background:#21262d;color:#c9d1d9;border:1px solid #30363d}
+.btn-save:disabled{background:#141b31;color:#4a5578;cursor:not-allowed;border:1px solid #232c4d}
+.btn-refresh{background:#232c4d;color:#c9d1d9;border:1px solid #232c4d}
 .btn-refresh:hover{background:#2d333b}
 .btn-refresh:disabled{opacity:.5;cursor:not-allowed}
 /* ---- spinner ---- */
-.spin{display:inline-block;width:14px;height:14px;border:2px solid #484f58;border-top-color:#58a6ff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #4a5578;border-top-color:#4da3ff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* ---- dirty badge ---- */
 .dirty-badge{font-size:12px;color:#e3b341;background:#2d2207;border:1px solid #6a4a0a;border-radius:6px;padding:3px 8px;display:none}
 .dirty-badge.show{display:inline-block}
 /* ---- name cell ---- */
 .name-wrap{display:flex;align-items:center;gap:5px;min-width:0}
-.name-edit-btn{background:none;border:none;padding:1px 4px;font-size:13px;color:#484f58;cursor:pointer;border-radius:4px;line-height:1;flex-shrink:0}
-.name-edit-btn:hover{color:#8b949e;background:#21262d}
-.name-vendor{color:#8b949e;font-style:italic;font-size:13px}
-.name-input{background:#0d1117;color:#e6edf3;border:1px solid #58a6ff;border-radius:5px;padding:3px 6px;font-size:13px;min-width:80px;width:160px}
+.name-edit-btn{background:none;border:none;padding:1px 4px;font-size:13px;color:#4a5578;cursor:pointer;border-radius:4px;line-height:1;flex-shrink:0}
+.name-edit-btn:hover{color:#8b96b8;background:#232c4d}
+.name-vendor{color:#8b96b8;font-style:italic;font-size:13px}
+.name-input{background:#0b1020;color:#e6ecff;border:1px solid #4da3ff;border-radius:5px;padding:3px 6px;font-size:13px;min-width:80px;width:160px}
 /* ---- rate columns ---- */
-td.rate{font-variant-numeric:tabular-nums;font-size:13px;color:#8b949e;text-align:right;white-space:nowrap}
-td.rate.active{color:#e6edf3}
-.rate-muted{color:#484f58}
+td.rate{font-variant-numeric:tabular-nums;font-size:13px;color:#8b96b8;text-align:right;white-space:nowrap}
+td.rate.active{color:#e6ecff}
+.rate-muted{color:#4a5578}
 /* ---- add-device panel ---- */
-.add-panel{margin-top:18px;padding:14px;background:#161b22;border:1px solid #21262d;border-radius:10px}
-.add-panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:#9da7b3;margin:0 0 10px}
+.add-panel{margin-top:18px;padding:14px;background:#141b31;border:1px solid #232c4d;border-radius:10px}
+.add-panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:#8b96b8;margin:0 0 10px}
 .add-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.add-panel input[type=text]{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:7px 9px;font-family:ui-monospace,monospace;font-size:13px;width:210px}
-.add-panel select{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 8px;font-size:13px}
-.btn-add{background:#21262d;color:#c9d1d9;border:1px solid #30363d;padding:7px 14px;font-size:13px}
+.add-panel input[type=text]{background:#0b1020;color:#e6ecff;border:1px solid #232c4d;border-radius:6px;padding:7px 9px;font-family:ui-monospace,monospace;font-size:13px;width:210px}
+.add-panel select{background:#0b1020;color:#e6ecff;border:1px solid #232c4d;border-radius:6px;padding:6px 8px;font-size:13px}
+.btn-add{background:#232c4d;color:#c9d1d9;border:1px solid #232c4d;padding:7px 14px;font-size:13px}
 .btn-add:hover{background:#2d333b}
 /* ---- empty state ---- */
-.empty-row td{color:#8b949e;text-align:center;padding:28px 10px;font-style:italic}
+.empty-row td{color:#8b96b8;text-align:center;padding:28px 10px;font-style:italic}
+/* ---- capacity panel + steering pill ---- */
+.cap-panel{background:#141b31;border:1px solid #232c4d;border-radius:10px;padding:14px 16px;margin-top:16px}
+.cap-panel h2{margin:0 0 4px;font-size:15px}
+.cap-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0}
+.cap-grid label{display:block;font-size:11px;color:#8b96b8;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
+.cap-grid input{width:100%;box-sizing:border-box;background:#0b1020;border:1px solid #232c4d;border-radius:6px;color:#e6ecff;padding:7px 9px;font-size:14px}
+.btn-cap{background:#238636;color:#fff}
+.btn-cap:disabled{background:#1c2440;color:#8b96b8;cursor:default}
+.steer-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px;letter-spacing:.3px;margin-left:8px;vertical-align:1px}
+.steer-off{background:#1c2440;color:#8b96b8}
+.steer-on{background:#3a2f14;color:#e3b341}
 /* ---- legend ---- */
-.legend{color:#8b949e;font-size:12px;margin-top:10px}
-@media(max-width:600px){
-  .seg label{padding:5px 6px;font-size:11px}
-  td,th{padding:7px 6px;font-size:13px}
-  .mac{font-size:11px}
-  .col-down,.col-up{display:none}
+.legend{color:#8b96b8;font-size:12px;margin-top:10px}
+/* ---- WAN assignment badge (card mode) ---- */
+.wan-badge{display:none;font-size:11px;font-weight:700;border-radius:5px;padding:2px 7px;letter-spacing:.3px}
+.r-wan1 .wan-badge{background:#132a45;color:#4da3ff}
+.r-wan2 .wan-badge{background:#2c1f45;color:#d2a8ff}
+.r-default .wan-badge{background:#1f3a1f;color:#3ddc84}
+.r-balanced .wan-badge{background:#3a2f14;color:#e3b341}
+/* ---- narrow screens: cards, not a horizontal-scroll table ---- */
+@media(max-width:720px){
+  table,tbody{display:block}
+  thead{display:none}
+  tbody tr{display:grid;grid-template-columns:auto 1fr auto;gap:2px 10px;align-items:center;background:#141b31;border:1px solid #232c4d;border-radius:10px;padding:10px 12px;margin-bottom:10px}
+  tbody tr.hidden-row{display:none}
+  td{display:block;border-bottom:none;padding:1px 0;font-size:13px}
+  td[data-label]::before{content:attr(data-label);color:#8b96b8;font-size:10px;text-transform:uppercase;letter-spacing:.4px;display:block}
+  td:first-child{grid-column:1;grid-row:1}
+  td:nth-child(2){grid-column:2;grid-row:1;font-weight:600;font-size:14px}
+  td:nth-child(2)::before,td:first-child::before{display:none}
+  td:nth-child(3){grid-column:2/4;grid-row:2}
+  td:nth-child(4){grid-column:2/4;grid-row:3}
+  td.rate{grid-row:4;text-align:left}
+  td.rate.col-down{grid-column:2}
+  td.rate.col-up{grid-column:3}
+  td:last-child{grid-column:1/-1;grid-row:5;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0 0;border-top:1px solid #232c4d;margin-top:6px}
+  .wan-badge{display:inline-block}
+  .r-wan1 td:first-child,.r-wan2 td:first-child,.r-default td:first-child{border-left:none}
+  tbody tr.r-wan1{border-left:3px solid #4da3ff}
+  tbody tr.r-wan2{border-left:3px solid #d2a8ff}
+  tbody tr.r-balanced{border-left:3px solid #e3b341}
+  .empty-row{display:block}
+  .empty-row td{grid-column:1/-1}
+  .seg label{padding:6px 8px;font-size:12px}
+  .toolbar input[type=search]{max-width:none}
 }
 </style>
 </head>
@@ -554,17 +774,17 @@ td.rate.active{color:#e6edf3}
 <table id="dev-table">
   <thead>
     <tr>
-      <th onclick="sortBy('online')" id="th-online"><span class="sort-arrow">&#9660;</span></th>
-      <th onclick="sortBy('ip')" id="th-ip">IP <span class="sort-arrow"></span></th>
-      <th onclick="sortBy('mac')" id="th-mac">MAC <span class="sort-arrow"></span></th>
-      <th onclick="sortBy('name')" id="th-name">Name <span class="sort-arrow"></span></th>
-      <th onclick="sortBy('down_kbps')" id="th-down" class="col-down">&#8595; Down <span class="sort-arrow"></span></th>
-      <th onclick="sortBy('up_kbps')" id="th-up" class="col-up">&#8593; Up <span class="sort-arrow"></span></th>
+      <th id="th-online"><button type="button" class="th-btn" onclick="sortBy('online')" aria-label="Sort by online status"><span class="sort-arrow">&#9660;</span></button></th>
+      <th id="th-ip"><button type="button" class="th-btn" onclick="sortBy('ip')">IP <span class="sort-arrow" aria-hidden="true"></span></button></th>
+      <th id="th-mac"><button type="button" class="th-btn" onclick="sortBy('mac')">MAC <span class="sort-arrow" aria-hidden="true"></span></button></th>
+      <th id="th-name"><button type="button" class="th-btn" onclick="sortBy('name')">Name <span class="sort-arrow" aria-hidden="true"></span></button></th>
+      <th id="th-down" class="col-down"><button type="button" class="th-btn" onclick="sortBy('down_kbps')">&#8595; Down <span class="sort-arrow" aria-hidden="true"></span></button></th>
+      <th id="th-up" class="col-up"><button type="button" class="th-btn" onclick="sortBy('up_kbps')">&#8593; Up <span class="sort-arrow" aria-hidden="true"></span></button></th>
       <th>WAN</th>
     </tr>
   </thead>
   <tbody id="dev-body">
-    <tr><td colspan="7" style="text-align:center;padding:20px;color:#8b949e">Loading&hellip;</td></tr>
+    <tr><td colspan="7" style="text-align:center;padding:20px;color:#8b96b8">Loading&hellip;</td></tr>
   </tbody>
 </table>
 
@@ -575,6 +795,7 @@ td.rate.active{color:#e6edf3}
     <select id="add-wan">
       <option value="c" id="add-opt-wan2"></option>
       <option value="v" id="add-opt-wan1"></option>
+      <option value="b">Auto (balanced)</option>
       <option value="d">Default</option>
     </select>
     <button class="btn-add" onclick="addDevice()">Add</button>
@@ -582,10 +803,26 @@ td.rate.active{color:#e6edf3}
   <p class="legend">For a device that has not yet requested DHCP. It will appear in the table and be included in the next Save.</p>
 </div>
 
+<div class="cap-panel">
+  <h2>WAN capacity &amp; Auto (balanced) steering<span class="steer-pill steer-off" id="steer-pill">steering off</span></h2>
+  <p class="legend">Auto devices spill over between WANs based on load. Steering stays OFF until real down/up Mbps are saved for BOTH WANs - guessed capacities could steer traffic into a saturated link.</p>
+  <div class="cap-grid">
+    <div><label for="cap-w1d" id="cap-w1d-lbl">WAN1 down Mbps</label><input id="cap-w1d" inputmode="numeric" autocomplete="off"></div>
+    <div><label for="cap-w1u" id="cap-w1u-lbl">WAN1 up Mbps</label><input id="cap-w1u" inputmode="numeric" autocomplete="off"></div>
+    <div><label for="cap-w2d" id="cap-w2d-lbl">WAN2 down Mbps</label><input id="cap-w2d" inputmode="numeric" autocomplete="off"></div>
+    <div><label for="cap-w2u" id="cap-w2u-lbl">WAN2 up Mbps</label><input id="cap-w2u" inputmode="numeric" autocomplete="off"></div>
+    <div><label for="cap-hi">High threshold %</label><input id="cap-hi" inputmode="numeric" autocomplete="off" placeholder="85"></div>
+    <div><label for="cap-lo">Low threshold %</label><input id="cap-lo" inputmode="numeric" autocomplete="off" placeholder="60"></div>
+    <div><label for="cap-cd">Cooldown s</label><input id="cap-cd" inputmode="numeric" autocomplete="off" placeholder="120"></div>
+  </div>
+  <button class="btn-cap" id="btn-cap" onclick="saveCapacity()">Save capacity</button>
+</div>
+
 <p class="legend">
   Green dot = currently reachable (REACHABLE/STALE/DELAY/PROBE in ARP table).
   &ldquo;Default&rdquo; = unlocked device follows the default WAN.
   Locking pins the device to one WAN with automatic failover.
+  &ldquo;Auto&rdquo; adds the device to the balanced spillover pool (steered by load once capacities are configured).
   Click &#9998; to rename a device (stored in /etc/wan-affinity/names.list, survives reboots).
   Italic muted text = offline OUI vendor lookup (no custom name set).
   Rates from conntrack; each refresh takes ~1s. Enable Live for continuous updates.
@@ -659,6 +896,106 @@ function updateMeta(meta) {
   var mid = document.createTextNode(' · ' + w2 + ' (table 101) via ');
   var b2 = document.createElement('b'); b2.textContent = d2;
   el.appendChild(t); el.appendChild(b1); el.appendChild(mid); el.appendChild(b2);
+
+  // capacity labels follow provider labels
+  var l1d=document.getElementById('cap-w1d-lbl'), l1u=document.getElementById('cap-w1u-lbl');
+  var l2d=document.getElementById('cap-w2d-lbl'), l2u=document.getElementById('cap-w2u-lbl');
+  if (l1d) l1d.textContent = w1 + ' down Mbps';
+  if (l1u) l1u.textContent = w1 + ' up Mbps';
+  if (l2d) l2d.textContent = w2 + ' down Mbps';
+  if (l2u) l2u.textContent = w2 + ' up Mbps';
+
+  // fill capacity inputs from meta, but never clobber in-progress edits
+  var cap = meta.capacity || {};
+  var fields = [['cap-w1d','wan1_down_mbps'],['cap-w1u','wan1_up_mbps'],
+                ['cap-w2d','wan2_down_mbps'],['cap-w2u','wan2_up_mbps'],
+                ['cap-hi','hi_pct'],['cap-lo','lo_pct'],['cap-cd','cooldown_s']];
+  for (var i = 0; i < fields.length; i++) {
+    var inp = document.getElementById(fields[i][0]);
+    if (!inp || inp === document.activeElement || inp.dataset.dirty === '1') continue;
+    var v = cap[fields[i][1]];
+    inp.value = (v === null || v === undefined) ? '' : String(v);
+  }
+
+  // steering pill
+  var st = meta.steering || {};
+  var pill = document.getElementById('steer-pill');
+  if (pill) {
+    if (st.active) {
+      pill.className = 'steer-pill steer-on';
+      var tl = st.target === 'wan1' ? w1 : st.target === 'wan2' ? w2 : null;
+      pill.textContent = tl ? ('steering: new Auto flows -> ' + tl) : 'steering active';
+    } else if (st.configured) {
+      pill.className = 'steer-pill steer-off';
+      pill.textContent = 'configured - no Auto devices';
+    } else {
+      pill.className = 'steer-pill steer-off';
+      pill.textContent = 'steering off - set capacities';
+    }
+  }
+}
+
+// ---- capacity save ----------------------------------------------------------
+// Marks inputs dirty on edit so live refresh never clobbers typing; clears the
+// flags after a successful save so the server-confirmed values show again.
+(function(){
+  var ids = ['cap-w1d','cap-w1u','cap-w2d','cap-w2u','cap-hi','cap-lo','cap-cd'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) el.addEventListener('input', function(){ this.dataset.dirty = '1'; });
+  }
+})();
+
+function saveCapacity() {
+  var get = function(id){ return document.getElementById(id).value.trim(); };
+  var vals = {
+    wan1_down_mbps: get('cap-w1d'), wan1_up_mbps: get('cap-w1u'),
+    wan2_down_mbps: get('cap-w2d'), wan2_up_mbps: get('cap-w2u'),
+    hi_pct: get('cap-hi') || '85', lo_pct: get('cap-lo') || '60',
+    cooldown_s: get('cap-cd') || '120'
+  };
+  // client-side mirror of server validation for fast feedback
+  var pos = /^[0-9]+$/;
+  var k;
+  for (k in vals) {
+    if (!pos.test(vals[k])) { showToast('All capacity fields must be numbers (' + k + ').', 'err'); return; }
+  }
+  if (+vals.wan1_down_mbps < 1 || +vals.wan1_up_mbps < 1 || +vals.wan2_down_mbps < 1 || +vals.wan2_up_mbps < 1) {
+    showToast('Capacities must be positive Mbps.', 'err'); return;
+  }
+  var hi = +vals.hi_pct, lo = +vals.lo_pct;
+  if (!(lo > 0 && lo < hi && hi <= 100)) {
+    showToast('Need 0 < low < high <= 100.', 'err'); return;
+  }
+  var btn = document.getElementById('btn-cap');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Saving';
+  var body = 'action=capacity';
+  for (k in vals) body += '&' + k + '=' + encodeURIComponent(vals[k]);
+  fetch(window.location.pathname, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: body
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if (res.ok) {
+        showToast(res.msg || 'Capacity saved.', 'ok');
+        var ids = ['cap-w1d','cap-w1u','cap-w2d','cap-w2u','cap-hi','cap-lo','cap-cd'];
+        for (var i = 0; i < ids.length; i++) {
+          var el = document.getElementById(ids[i]);
+          if (el) delete el.dataset.dirty;
+        }
+        refreshDevices();  // re-pull meta so the steering pill reflects the new state
+      } else {
+        showToast(res.msg || 'Capacity save failed.', 'err');
+      }
+    })
+    .catch(function(e){ showToast('Capacity save failed: ' + e.message, 'err'); })
+    .finally(function(){
+      btn.disabled = false;
+      btn.textContent = 'Save capacity';
+    });
 }
 
 // ---- sort -------------------------------------------------------------------
@@ -738,18 +1075,19 @@ function renderTable() {
     etd.textContent = 'No devices found - is anything connected?';
     etr.appendChild(etd);
     tbody.appendChild(etr);
-    updateSummary(0, 0, 0, 0);
+    updateSummary(0, 0, 0, 0, 0);
     return;
   }
 
   var filter = document.getElementById('search').value.toLowerCase();
-  var total = sorted.length, nDef = 0, nW1 = 0, nW2 = 0;
+  var total = sorted.length, nDef = 0, nW1 = 0, nW2 = 0, nBal = 0;
 
   for (var i = 0; i < sorted.length; i++) {
     var d = sorted[i];
     var curWan = overrides[d.mac] !== undefined ? overrides[d.mac] : d.wan;
     if (curWan === 'wan1') nW1++;
     else if (curWan === 'wan2') nW2++;
+    else if (curWan === 'balanced') nBal++;
     else nDef++;
 
     var tr = document.createElement('tr');
@@ -764,6 +1102,7 @@ function renderTable() {
 
     // col: online dot
     var tdDot = document.createElement('td');
+    tdDot.setAttribute('data-label', '');
     var dot = document.createElement('span');
     dot.className = 'dot dot-' + (d.online ? 'on' : 'off');
     dot.title = d.online ? 'online' : 'offline';
@@ -772,22 +1111,26 @@ function renderTable() {
 
     // col: ip
     var tdIp = document.createElement('td');
+    tdIp.setAttribute('data-label', 'IP');
     tdIp.textContent = d.ip === '-' ? '' : d.ip;
     tr.appendChild(tdIp);
 
     // col: mac
     var tdMac = document.createElement('td');
+    tdMac.setAttribute('data-label', 'MAC');
     tdMac.className = 'mac';
     tdMac.textContent = d.mac;
     tr.appendChild(tdMac);
 
     // col: name (with inline edit)
     var tdName = document.createElement('td');
+    tdName.setAttribute('data-label', 'Name');
     tdName.appendChild(makeNameCell(d));
     tr.appendChild(tdName);
 
     // col: down rate
     var tdDown = document.createElement('td');
+    tdDown.setAttribute('data-label', 'Down');
     tdDown.className = 'rate col-down';
     var dnStr = fmtRate(d.down_kbps);
     if (dnStr) {
@@ -802,6 +1145,7 @@ function renderTable() {
 
     // col: up rate
     var tdUp = document.createElement('td');
+    tdUp.setAttribute('data-label', 'Up');
     tdUp.className = 'rate col-up';
     var upStr = fmtRate(d.up_kbps);
     if (upStr) {
@@ -817,12 +1161,16 @@ function renderTable() {
     // col: WAN segmented control
     var tdWan = document.createElement('td');
     tdWan.appendChild(makeSegControl(d.mac, curWan));
+    var badge = document.createElement('span');
+    badge.className = 'wan-badge';
+    badge.textContent = curWan === 'wan1' ? WAN1_LABEL : curWan === 'wan2' ? WAN2_LABEL : curWan === 'balanced' ? 'Auto' : 'Default';
+    tdWan.appendChild(badge);
     tr.appendChild(tdWan);
 
     tbody.appendChild(tr);
   }
 
-  updateSummary(total, nDef, nW1, nW2);
+  updateSummary(total, nDef, nW1, nW2, nBal);
   updateSortHeaders();
 }
 
@@ -919,9 +1267,10 @@ function makeSegControl(mac, curWan) {
   var nm = 'w_' + mac.replace(/:/g, '');
 
   var opts = [
-    {val:'default', label:'Default',   cls:'lbl-default'},
-    {val:'wan1',    label:WAN1_LABEL,  cls:'lbl-wan1'},
-    {val:'wan2',    label:WAN2_LABEL,  cls:'lbl-wan2'}
+    {val:'default',  label:'Default',   cls:'lbl-default'},
+    {val:'wan1',     label:WAN1_LABEL,  cls:'lbl-wan1'},
+    {val:'wan2',     label:WAN2_LABEL,  cls:'lbl-wan2'},
+    {val:'balanced', label:'Auto',      cls:'lbl-balanced'}
   ];
 
   for (var i = 0; i < opts.length; i++) {
@@ -989,7 +1338,7 @@ function saveChanges() {
   for (var i = 0; i < devices.length; i++) {
     var d = devices[i];
     var wan = overrides[d.mac] !== undefined ? overrides[d.mac] : d.wan;
-    var w = wan === 'wan1' ? 'v' : wan === 'wan2' ? 'c' : 'd';
+    var w = wan === 'wan1' ? 'v' : wan === 'wan2' ? 'c' : wan === 'balanced' ? 'b' : 'd';
     tokens.push(d.mac + '|' + w);
   }
 
@@ -1038,7 +1387,7 @@ function addDevice() {
   }
 
   var wanCode = wanSel.value;
-  var wan = wanCode === 'v' ? 'wan1' : wanCode === 'c' ? 'wan2' : 'default';
+  var wan = wanCode === 'v' ? 'wan1' : wanCode === 'c' ? 'wan2' : wanCode === 'b' ? 'balanced' : 'default';
 
   // add to local state and mark as override
   devices.push({mac: mac, ip: '-', name: '', vendor: '', custom_name: '', online: false, wan: 'default', up_kbps: 0, down_kbps: 0});
@@ -1066,7 +1415,7 @@ function filterRows() {
 }
 
 // ---- summary ----------------------------------------------------------------
-function updateSummary(total, nDef, nW1, nW2) {
+function updateSummary(total, nDef, nW1, nW2, nBal) {
   var el = document.getElementById('count-summary');
   if (total === 0) { el.innerHTML = ''; return; }
   el.innerHTML = '';
@@ -1076,13 +1425,18 @@ function updateSummary(total, nDef, nW1, nW2) {
   el.appendChild(bd);
   if (nW1 > 0) {
     el.appendChild(document.createTextNode(', '));
-    var b1 = document.createElement('b'); b1.style.color='#58a6ff'; b1.textContent = nW1 + ' ' + WAN1_LABEL;
+    var b1 = document.createElement('b'); b1.style.color='#4da3ff'; b1.textContent = nW1 + ' ' + WAN1_LABEL;
     el.appendChild(b1);
   }
   if (nW2 > 0) {
     el.appendChild(document.createTextNode(', '));
     var b2 = document.createElement('b'); b2.style.color='#d2a8ff'; b2.textContent = nW2 + ' ' + WAN2_LABEL;
     el.appendChild(b2);
+  }
+  if (nBal > 0) {
+    el.appendChild(document.createTextNode(', '));
+    var bb = document.createElement('b'); bb.style.color='#e3b341'; bb.textContent = nBal + ' Auto';
+    el.appendChild(bb);
   }
 }
 

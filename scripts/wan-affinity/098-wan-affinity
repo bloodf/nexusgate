@@ -165,3 +165,127 @@ while ip rule show | grep -qE "^50:[[:space:]].*iif br-lan lookup 100" && [ "$_i
 	ip rule del priority 50 iif br-lan lookup 100 2>/dev/null
 	_i=$((_i + 1))
 done
+
+# ---- balanced-policy spillover steering --------------------------------------
+# Opt-in per device via /etc/wan-affinity/balanced.list; explicit pins and the
+# unlisted->WAN1 default are NEVER affected. New balanced flows are steered to
+# the target WAN; existing flows stay put via ct-mark stickiness (see
+# gen-dyn-nft.sh -- masked to 0x30000, dual-register foreign-mark guards).
+#
+# HARD GATE: byte counters cannot indicate congestion without knowing the real
+# usable rate of each link, and guessed defaults could steer traffic INTO a
+# saturated slower WAN. So steering stays OFF until the operator has saved
+# explicit down/up Mbps for BOTH WANs (uci wan_affinity.capacity.*, set via the
+# web UI). Health failover above is independent and always active.
+#
+# Overload signal: per-tick byte deltas from /sys/class/net -> EWMA (alpha
+# 3/10, integer math) -> percent of configured capacity. Flip only when the
+# current target is above HI_PCT AND the other WAN is below LO_PCT AND
+# COOLDOWN_S has elapsed since the last flip (prevents ping-pong when a burst
+# straddles both links). A dead target WAN flips immediately (health first).
+GEN_DYN=/usr/lib/wan-affinity/gen-dyn-nft.sh
+BAL_LIST="${WA_DIR:-/etc/wan-affinity}/balanced.list"
+STATE=/tmp/wan-affinity.steer
+
+cap_d1=$(uci -q get wan_affinity.capacity.wan1_down_mbps 2>/dev/null || true)
+cap_u1=$(uci -q get wan_affinity.capacity.wan1_up_mbps   2>/dev/null || true)
+cap_d2=$(uci -q get wan_affinity.capacity.wan2_down_mbps 2>/dev/null || true)
+cap_u2=$(uci -q get wan_affinity.capacity.wan2_up_mbps   2>/dev/null || true)
+HI_PCT=$(uci -q get wan_affinity.capacity.hi_pct 2>/dev/null || true)
+LO_PCT=$(uci -q get wan_affinity.capacity.lo_pct 2>/dev/null || true)
+COOLDOWN_S=$(uci -q get wan_affinity.capacity.cooldown_s 2>/dev/null || true)
+
+_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) [ "$1" -gt 0 ] ;; esac; }
+_uint() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+# Threshold sanity: strictly 0 < LO < HI <= 100, cooldown a nonnegative int.
+# Anything malformed or out of bounds falls back to defaults (edge-logged) so a
+# bad uci value can't abort the hook under `set -e` mid-arithmetic, and so
+# hysteresis is never inverted (LO >= HI would flap every tick).
+if ! _num "${HI_PCT:-}" || ! _num "${LO_PCT:-}" || [ "${HI_PCT:-0}" -gt 100 ] \
+	|| [ "${LO_PCT:-0}" -ge "${HI_PCT:-0}" ]; then
+	if [ -n "${HI_PCT:-}${LO_PCT:-}" ] && [ ! -f /tmp/wan-affinity.badthresh ]; then
+		logger -t wan-affinity -p daemon.warn \
+			"invalid hi_pct/lo_pct ('${HI_PCT:-}'/'${LO_PCT:-}'); using defaults 85/60 (need 0 < lo < hi <= 100)" 2>/dev/null || true
+		: > /tmp/wan-affinity.badthresh
+	fi
+	HI_PCT=85; LO_PCT=60
+else
+	rm -f /tmp/wan-affinity.badthresh
+fi
+_uint "${COOLDOWN_S:-}" || COOLDOWN_S=120
+
+_bal_active=0
+if [ -x "$GEN_DYN" ] && [ -s "$BAL_LIST" ] \
+	&& grep -qE '^[[:space:]]*[0-9a-fA-F:]' "$BAL_LIST" 2>/dev/null \
+	&& _num "${cap_d1:-}" && _num "${cap_u1:-}" && _num "${cap_d2:-}" && _num "${cap_u2:-}"; then
+	_bal_active=1
+fi
+
+if [ "$_bal_active" = 1 ]; then
+	now=$(date +%s)
+	rx1=$(cat "/sys/class/net/${DEV1:-none}/statistics/rx_bytes" 2>/dev/null || echo 0)
+	tx1=$(cat "/sys/class/net/${DEV1:-none}/statistics/tx_bytes" 2>/dev/null || echo 0)
+	rx2=$(cat "/sys/class/net/${DEV2:-none}/statistics/rx_bytes" 2>/dev/null || echo 0)
+	tx2=$(cat "/sys/class/net/${DEV2:-none}/statistics/tx_bytes" 2>/dev/null || echo 0)
+
+	# state: ts rx1 tx1 rx2 tx2 e_d1 e_u1 e_d2 e_u2 target flip_ts
+	p_ts=0; p_rx1=0; p_tx1=0; p_rx2=0; p_tx2=0
+	e_d1=0; e_u1=0; e_d2=0; e_u2=0; target=wan1; flip_ts=0
+	[ -f "$STATE" ] && read -r p_ts p_rx1 p_tx1 p_rx2 p_tx2 e_d1 e_u1 e_d2 e_u2 target flip_ts < "$STATE" 2>/dev/null || true
+	case "$target" in wan1|wan2) ;; *) target=wan1 ;; esac
+
+	dt=$((now - p_ts))
+	if [ "$dt" -ge 1 ] && [ "$dt" -le 600 ] && [ "$p_ts" -gt 0 ]; then
+		# Bytes/s this window; counter reset/wrap (negative delta) -> treat as 0.
+		_rate() { d=$(( $1 - $2 )); [ "$d" -lt 0 ] && d=0; echo $(( d / dt )); }
+		r_d1=$(_rate "$rx1" "$p_rx1"); r_u1=$(_rate "$tx1" "$p_tx1")
+		r_d2=$(_rate "$rx2" "$p_rx2"); r_u2=$(_rate "$tx2" "$p_tx2")
+		# EWMA alpha=3/10: e = (3*sample + 7*e) / 10
+		e_d1=$(( (3*r_d1 + 7*e_d1) / 10 )); e_u1=$(( (3*r_u1 + 7*e_u1) / 10 ))
+		e_d2=$(( (3*r_d2 + 7*e_d2) / 10 )); e_u2=$(( (3*r_u2 + 7*e_u2) / 10 ))
+
+		# Utilization %: worst of down/up vs configured capacity (Mbps*125000 B/s).
+		u1d=$(( e_d1 * 100 / (cap_d1 * 125000) )); u1u=$(( e_u1 * 100 / (cap_u1 * 125000) ))
+		u2d=$(( e_d2 * 100 / (cap_d2 * 125000) )); u2u=$(( e_u2 * 100 / (cap_u2 * 125000) ))
+		util1=$u1d; [ "$u1u" -gt "$util1" ] && util1=$u1u
+		util2=$u2d; [ "$u2u" -gt "$util2" ] && util2=$u2u
+
+		new_target=$target
+		if [ "$target" = wan1 ] && [ "$WAN1_OK" = 0 ] && [ "$WAN2_OK" = 1 ]; then
+			new_target=wan2   # health beats cooldown
+		elif [ "$target" = wan2 ] && [ "$WAN2_OK" = 0 ] && [ "$WAN1_OK" = 1 ]; then
+			new_target=wan1
+		elif [ $((now - flip_ts)) -ge "$COOLDOWN_S" ]; then
+			if [ "$target" = wan1 ] && [ "$WAN2_OK" = 1 ] \
+				&& [ "$util1" -ge "$HI_PCT" ] && [ "$util2" -le "$LO_PCT" ]; then
+				new_target=wan2
+			elif [ "$target" = wan2 ] && [ "$WAN1_OK" = 1 ] \
+				&& [ "$util2" -ge "$HI_PCT" ] && [ "$util1" -le "$LO_PCT" ]; then
+				new_target=wan1
+			fi
+		fi
+
+		if [ "$new_target" != "$target" ]; then
+			logger -t wan-affinity -p daemon.notice \
+				"balanced steering: $target -> $new_target (util1=${util1}% util2=${util2}% hi=$HI_PCT lo=$LO_PCT)" 2>/dev/null || true
+			target=$new_target
+			flip_ts=$now
+			"$GEN_DYN" "$target" || logger -t wan-affinity -p daemon.err "gen-dyn-nft.sh $target failed" 2>/dev/null || true
+		fi
+	fi
+
+	# (Re)install the dyn table if missing (first activation, fw4 full restart).
+	nft list table inet wan_affinity_dyn >/dev/null 2>&1 \
+		|| "$GEN_DYN" "$target" 2>/dev/null \
+		|| logger -t wan-affinity -p daemon.err "gen-dyn-nft.sh install failed" 2>/dev/null || true
+
+	printf '%s %s %s %s %s %s %s %s %s %s %s\n' \
+		"$now" "$rx1" "$tx1" "$rx2" "$tx2" "$e_d1" "$e_u1" "$e_d2" "$e_u2" "$target" "$flip_ts" > "$STATE"
+else
+	# Steering disabled (unconfigured capacities or empty balanced.list): tear
+	# down the dyn chain so no stale steering rule outlives its configuration,
+	# and drop stale samples so re-enable starts with a fresh EWMA.
+	nft delete table inet wan_affinity_dyn >/dev/null 2>&1 || true
+	rm -f "$STATE"
+fi
