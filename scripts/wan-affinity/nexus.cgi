@@ -23,6 +23,8 @@ VIVO_LIST="$WA_DIR/vivo.list"
 NAMES_LIST="$WA_DIR/names.list"
 OUI_DB=/usr/lib/wan-affinity/oui.db
 LEASES=/tmp/dhcp.leases
+# space-separated LAN-side interfaces for neighbor-table scoping (override via env)
+LAN_IFS="${LAN_IFS:-br-lan}"
 
 jsonesc() {
 	printf '%s' "$1" | awk 'BEGIN{ORS=""} {gsub(/\\/,"\\\\");gsub(/"/,"\\\"");gsub(/\t/,"\\t");gsub(/\r/,"\\r"); if(NR>1) printf "\\n"; printf "%s",$0}'
@@ -112,14 +114,23 @@ case "${QUERY_STRING:-}" in
 	printf ','
 	_wan_json wan2 "$wan2_label" 10
 	printf '],"router":{"name":"NexusGate","lan":"br-lan"},"devices":['
-	# LAN devices: dhcp leases merged with locked-but-offline MACs (same union
-	# as wan-affinity.cgi so the two tabs never disagree on the device set).
+	# LAN devices: dhcp leases + locked lists + neighbor table (neighbor-only
+	# clients — e.g. static IPs, IPv6-only — must appear too). ip neigh is
+	# snapshotted ONCE per response, not forked per device.
+	# Neighbor snapshot, LAN-scoped: WAN gateway/ISP neighbors (pppoe-wan,
+	# eth0.6, eth0.10, ...) must never surface as downstream devices.
+	NEIGH=$(ip neigh show 2>/dev/null | awk -v ifs="$LAN_IFS" '
+		BEGIN{n=split(ifs,a," ");for(i=1;i<=n;i++)ok[a[i]]=1}
+		{for(i=1;i<NF;i++)if($i=="dev"&&ok[$(i+1)]){print;next}}')
 	{
 		[ -f "$LEASES" ] && awk '{print tolower($2)"|"$3"|"$4}' "$LEASES"
 		for f in "$CLARO_LIST" "$VIVO_LIST"; do
 			[ -f "$f" ] && sed 's/#.*//; s/[[:space:]]//g' "$f" | grep -v '^$' | \
 				tr 'A-F' 'a-f' | sed 's/$/||/'
 		done
+		# neighbor-derived rows: "<ip> dev <if> lladdr <mac> <STATE>"
+		printf '%s\n' "$NEIGH" | awk 'tolower($0) ~ /lladdr/ {
+			for (i=1;i<NF;i++) if ($i=="lladdr") print tolower($(i+1))"|"$1"|"}'
 	} | awk -F'|' '!seen[$1]++' | {
 		_first=1
 		while IFS='|' read -r mac ip lname; do
@@ -131,13 +142,19 @@ case "${QUERY_STRING:-}" in
 			w=d
 			in_list "$mac" "$CLARO_LIST" && w=c
 			in_list "$mac" "$VIVO_LIST" && w=v
-			# reachability: neighbor table (no per-device pings; keeps API fast)
+			# reachability + full address set from the cached neighbor snapshot
+			nlines=$(printf '%s\n' "$NEIGH" | grep -i "lladdr $mac")
 			on=0
-			ip neigh show 2>/dev/null | grep -qi "lladdr $mac" && \
-				ip neigh show 2>/dev/null | grep -i "lladdr $mac" | grep -qE 'REACHABLE|STALE|DELAY|PROBE' && on=1
+			printf '%s\n' "$nlines" | grep -qE 'REACHABLE|STALE|DELAY|PROBE' && on=1
+			ips=$( { [ -n "$ip" ] && printf '%s\n' "$ip"
+				printf '%s\n' "$nlines" | awk 'NF{print $1}'
+				} | awk '!seen[$0]++' )
+			ipjson=$(printf '%s\n' "$ips" | grep -v '^$' | while IFS= read -r a; do
+				printf ',"%s"' "$(jsonesc "$a")"; done)
+			ipjson="[${ipjson#,}]"
 			if [ "$_first" = 1 ]; then _first=0; else printf ','; fi
-			printf '{"mac":"%s","ip":"%s","name":"%s","wan":"%s","online":%s}' \
-				"$mac" "$(jsonesc "$ip")" "$(jsonesc "$n")" "$w" "$on"
+			printf '{"mac":"%s","ip":"%s","ips":%s,"name":"%s","wan":"%s","online":%s}' \
+				"$mac" "$(jsonesc "$ip")" "$ipjson" "$(jsonesc "$n")" "$w" "$on"
 		done
 	}
 	printf ']}'
@@ -175,6 +192,14 @@ pre#logs{background:var(--card);border:1px solid var(--edge);border-radius:10px;
 padding:10px;max-height:50vh;overflow:auto;font-size:12px;white-space:pre-wrap}
 svg{width:100%;background:var(--card);border:1px solid var(--edge);border-radius:10px}
 text{fill:var(--txt);font-size:12px}.dimt{fill:var(--dim);font-size:11px}
+.grp{min-width:260px;flex:1}
+.grp .row{display:flex;gap:8px;align-items:baseline;padding:3px 0;border-bottom:1px solid var(--edge)}
+.grp .row:last-child{border-bottom:0}
+.grp .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none;align-self:center}
+.grp.v .dot{background:var(--v)}.grp.c .dot{background:var(--c)}
+.row.off .dot{background:#3a4569}.row.off .nm{color:var(--dim)}
+.nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meta{color:var(--dim);font-size:11px;margin-left:auto;white-space:nowrap}
 </style></head><body>
 <header><h1>NexusGate</h1><nav>
 <button data-t="aff" class="on">Devices</button>
@@ -184,7 +209,8 @@ text{fill:var(--txt);font-size:12px}.dimt{fill:var(--dim);font-size:11px}
 <div id="aff" class="tab on"><iframe src="/cgi-bin/wan-affinity"></iframe></div>
 <div id="stats" class="tab"><div class="cards" id="wancards"></div>
 <h3>Recent WAN log</h3><pre id="logs">loading…</pre></div>
-<div id="topo" class="tab"><svg id="svg" height="560"></svg></div>
+<div id="topo" class="tab"><svg id="svg" height="190"></svg>
+<div class="cards" id="groups"></div></div>
 <script>
 var prev=null, statTimer=null;
 document.querySelectorAll('nav button').forEach(function(b){
@@ -199,61 +225,76 @@ document.querySelectorAll('nav button').forEach(function(b){
 });
 function fmtB(n){var u=['B','KB','MB','GB','TB'],i=0;n=+n;
   while(n>=1024&&i<4){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i];}
+// All API-derived strings (names, labels, lease/OUI data) are client-controlled:
+// render exclusively via createElement/textContent (no HTML string assembly).
+function el(tag,cls,txt){var e=document.createElement(tag);
+  if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e;}
+function kv(t){return el('div','kv',t);}
 function loadStats(){
  fetch('?api=stats').then(function(r){return r.json()}).then(function(d){
-  var h='';
+  var wrap=document.getElementById('wancards');wrap.textContent='';
   d.wans.forEach(function(w){
-   var rate='';
+   var c=el('div','card');
+   var h=el('h2',null,w.label+' ');
+   h.appendChild(el('span','pill '+(w.up?'up':'down'),w.up?'UP':'DOWN'));
+   c.appendChild(h);
+   c.appendChild(kv('dev '+(w.dev||'\u2014')+' \u00b7 gw '+(w.gw||'\u2014')));
+   c.appendChild(kv('rx '+fmtB(w.rx_bytes)+' \u00b7 tx '+fmtB(w.tx_bytes)));
    if(prev&&prev.ts<d.ts){var dt=d.ts-prev.ts,p=prev.wans.find(function(x){return x.key===w.key});
-    if(p&&dt>0)rate='<div class="kv">&#8595; <b>'+fmtB((w.rx_bytes-p.rx_bytes)/dt)+'/s</b> '
-      +'&#8593; <b>'+fmtB((w.tx_bytes-p.tx_bytes)/dt)+'/s</b></div>';}
-   h+='<div class="card"><h2>'+esc(w.label)+' <span class="pill '+(w.up?'up':'down')+'">'
-    +(w.up?'UP':'DOWN')+'</span></h2>'
-    +'<div class="kv">dev <b>'+(w.dev?esc(w.dev):'—')+'</b> · gw <b>'+(w.gw?esc(w.gw):'—')+'</b></div>'
-    +'<div class="kv">rx <b>'+fmtB(w.rx_bytes)+'</b> · tx <b>'+fmtB(w.tx_bytes)+'</b></div>'
-    +rate+'</div>';
+    if(p&&dt>0)c.appendChild(kv('\u2193 '+fmtB((w.rx_bytes-p.rx_bytes)/dt)
+      +'/s \u00b7 \u2191 '+fmtB((w.tx_bytes-p.tx_bytes)/dt)+'/s'));}
+   wrap.appendChild(c);
   });
-  document.getElementById('wancards').innerHTML=h;
   document.getElementById('logs').textContent=d.logs.join('\n')||'(no matching log lines)';
   prev=d;
  }).catch(function(e){document.getElementById('logs').textContent='stats fetch failed: '+e;});
 }
+function svgEl(n,at){var e=document.createElementNS('http://www.w3.org/2000/svg',n);
+  for(var k in at)e.setAttribute(k,at[k]);return e;}
+function drawSpine(w1,w2){
+ var s=document.getElementById('svg');while(s.firstChild)s.removeChild(s.firstChild);
+ var W=s.clientWidth||900,cx=W/2;
+ function ln(x1,y1,x2,y2,col,dash){var l=svgEl('line',{x1:x1,y1:y1,x2:x2,y2:y2,
+   stroke:col,'stroke-width':1.5});if(dash)l.setAttribute('stroke-dasharray','4 3');
+   s.appendChild(l);}
+ function nd(x,y,r,col,label,sub){s.appendChild(svgEl('circle',{cx:x,cy:y,r:r,fill:col}));
+   var t=svgEl('text',{x:x+r+6,y:y+4});t.textContent=label;s.appendChild(t);
+   if(sub){var u=svgEl('text',{x:x+r+6,y:y+18,'class':'dimt'});u.textContent=sub;s.appendChild(u);}}
+ ln(cx,30,cx-140,95,w1.up?'#3ddc84':'#ff5470',!w1.up);
+ ln(cx,30,cx+140,95,w2.up?'#3ddc84':'#ff5470',!w2.up);
+ ln(cx-140,95,cx,160,'#4da3ff');ln(cx+140,95,cx,160,'#ffb84d');
+ nd(cx,30,9,'#8b96b8','Internet','');
+ nd(cx-140,95,8,w1.up?'#3ddc84':'#ff5470',w1.label,(w1.dev||'')+' '+(w1.gw||''));
+ nd(cx+140,95,8,w2.up?'#3ddc84':'#ff5470',w2.label,(w2.dev||'')+' '+(w2.gw||''));
+ nd(cx,160,9,'#e6ecff','NexusGate','br-lan');
+}
 function loadTopo(){
  fetch('?api=topology').then(function(r){return r.json()}).then(function(d){
-  var s=document.getElementById('svg'),W=s.clientWidth||900;
+  var w1=d.wans[0],w2=d.wans[1];
+  drawSpine(w1,w2);
   var devs=d.devices.slice().sort(function(a,b){return (b.online-a.online)||
     (a.name||a.mac).localeCompare(b.name||b.mac)});
-  var rows=Math.max(devs.length,1),H=Math.max(560,rows*26+180);s.setAttribute('height',H);
-  var g='',cx=W/2;
-  function line(x1,y1,x2,y2,col,dash){g+='<line x1="'+x1+'" y1="'+y1+'" x2="'+x2
-    +'" y2="'+y2+'" stroke="'+col+'" stroke-width="1.5"'+(dash?' stroke-dasharray="4 3"':'')+'/>';}
-  // label/sub MUST be pre-escaped by callers (esc()); node() concatenates into SVG markup.
-  function node(x,y,r,col,label,sub){g+='<circle cx="'+x+'" cy="'+y+'" r="'+r
-    +'" fill="'+col+'"/><text x="'+(x+r+6)+'" y="'+(y+4)+'">'+label+'</text>'
-    +(sub?'<text x="'+(x+r+6)+'" y="'+(y+18)+'" class="dimt">'+sub+'</text>':'');}
-  var iy=34,wy=100,ry=170;
-  var w1=d.wans[0],w2=d.wans[1];
-  line(cx,iy,cx-120,wy,w1.up?'#3ddc84':'#ff5470',!w1.up);
-  line(cx,iy,cx+120,wy,w2.up?'#3ddc84':'#ff5470',!w2.up);
-  line(cx-120,wy,cx,ry,'#4da3ff');line(cx+120,wy,cx,ry,'#ffb84d');
-  var y0=ry+50;
-  devs.forEach(function(dv,i){
-    var y=y0+i*26,col=dv.wan==='c'?'#ffb84d':'#4da3ff';
-    line(cx,ry,60,y,dv.online?col:'#232c4d',!dv.online);
-    node(60,y,5,dv.online?col:'#3a4569',
-      (dv.name?esc(dv.name):esc(dv.mac))+(dv.ip?' · '+esc(dv.ip):''),
-      esc(dv.mac)+(dv.wan==='c'?' → '+esc(w2.label):dv.wan==='v'?' → '+esc(w1.label):' → default'));
+  var groups=[{k:'v',t:w1.label+' (WAN1)',cls:'v'},
+              {k:'c',t:w2.label+' (WAN2)',cls:'c'},
+              {k:'',t:'Default route',cls:''}];
+  var wrap=document.getElementById('groups');wrap.textContent='';
+  groups.forEach(function(gr){
+   var list=devs.filter(function(x){return (x.wan||'')===gr.k});
+   var c=el('div','card grp'+(gr.cls?' '+gr.cls:''));
+   c.appendChild(el('h2',null,'\u2192 '+gr.t+' \u00b7 '+list.length));
+   list.forEach(function(dv){
+    var r=el('div','row'+(dv.online?'':' off'));
+    r.appendChild(el('span','dot'));
+    r.appendChild(el('span','nm',dv.name||dv.mac));
+    r.appendChild(el('span','meta',((dv.ips&&dv.ips.length?dv.ips:dv.ip?[dv.ip]:[]).join(', ')+' \u00b7 ').replace(/^ \u00b7 $/,'')+dv.mac));
+    c.appendChild(r);
+   });
+   if(!list.length)c.appendChild(kv('(none)'));
+   wrap.appendChild(c);
   });
-  node(cx,iy,9,'#8b96b8','Internet','');
-  node(cx-120,wy,8,w1.up?'#3ddc84':'#ff5470',esc(w1.label),esc((w1.dev||'')+' '+(w1.gw||'')));
-  node(cx+120,wy,8,w2.up?'#3ddc84':'#ff5470',esc(w2.label),esc((w2.dev||'')+' '+(w2.gw||'')));
-  node(cx,ry,9,'#e6ecff','NexusGate','br-lan');
-  s.innerHTML=g;
- }).catch(function(e){document.getElementById('svg').innerHTML=
-   '<text x="20" y="30">topology fetch failed: '+esc(String(e))+'</text>';});
+ }).catch(function(e){document.getElementById('groups').textContent=
+   'topology fetch failed: '+e;});
 }
-function esc(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;')
-  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 </script></body></html>
 HTML
 	;;
